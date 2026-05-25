@@ -1,0 +1,23 @@
+parameter,value,description
+db_mode,demo,Use 'demo' for SQLite local mode or 'sqlserver' for real SQL Server / Azure SQL
+db_server,${DB_SERVER},SQL Server hostname — set DB_SERVER in your .env file
+db_name,${DB_NAME},Database name — set DB_NAME in your .env file
+db_user,${DB_USER},SQL Server username — set DB_USER in your .env file
+db_password,${DB_PASSWORD},SQL Server password — set DB_PASSWORD in your .env file
+db_driver,${DB_DRIVER},ODBC driver string — set DB_DRIVER in your .env file (default: ODBC Driver 18 for SQL Server)
+source_schema,dbo,Schema where the source table lives
+source_table,invoices,Table to load and clean
+cleaned_schema,dbo,Schema for the cleaned output table
+cleaned_table,invoices_cleaned,Name of the cleaned table written back to DB
+export_csv_path,output/invoices_cleaned.csv,Path for the CSV export (relative to pipeline.py)
+log_csv_path,output/pipeline_run_log.csv,Path for the per-run audit log
+duplicate_subset,vendor_name;invoice_number,Semicolon-separated columns used to detect duplicates
+date_columns,invoice_date;due_date;payment_date,Semicolon-separated columns to parse and normalize as dates
+amount_columns,amount;tax_amount;total_amount,Semicolon-separated numeric columns to validate
+valid_currencies,USD;EUR;GBP;AUD;CAD;INR;SGD,Semicolon-separated list of accepted ISO currency codes
+valid_statuses,PAID;PENDING;OVERDUE;CANCELLED;DRAFT,Semicolon-separated list of valid invoice statuses
+outlier_zscore_threshold,3.0,Z-score threshold above which an amount is flagged as an outlier
+min_amount,0.0,Minimum valid amount (amounts below this are flagged)
+max_amount,10000000.0,Maximum valid amount (amounts above this are flagged)
+null_fill_string,UNKNOWN,Fill value for missing string/categorical columns
+null_fill_numeric,0.0,Fill value for missing numeric columns

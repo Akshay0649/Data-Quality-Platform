@@ -1,0 +1,37 @@
+# ── Secrets & credentials ──────────────────────────────────
+.env
+*.env
+
+# ── Database files ─────────────────────────────────────────
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ── Pipeline outputs (generated at runtime) ────────────────
+output/
+
+# ── Python cache ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments ───────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── Distribution / packaging ───────────────────────────────
+dist/
+build/
+*.egg-info/
+*.egg
+
+# ── IDE & OS ───────────────────────────────────────────────
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
