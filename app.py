@@ -351,12 +351,18 @@ if gen_btn:
     st.success(f"Demo dataset ready — {len(st.session_state['input_df'])} rows (with injected dirty data)")
 
 if uploaded_file is not None:
-    try:
-        st.session_state["input_df"] = pd.read_csv(uploaded_file)
-        st.session_state.pop("scored_df", None)
-        st.success(f"Uploaded successfully — {len(st.session_state['input_df'])} rows × {len(st.session_state['input_df'].columns)} columns")
-    except Exception as e:
-        st.error(f"Could not read CSV: {e}")
+    # Fingerprint the file so we only reload when the user picks a NEW file.
+    # Without this, every sidebar-filter change triggers a rerun, re-reads the
+    # same file, pops scored_df, and resets the view to an empty Dashboard.
+    file_key = f"{uploaded_file.name}_{uploaded_file.size}"
+    if st.session_state.get("_uploaded_file_key") != file_key:
+        try:
+            st.session_state["input_df"] = pd.read_csv(uploaded_file)
+            st.session_state.pop("scored_df", None)
+            st.session_state["_uploaded_file_key"] = file_key
+            st.success(f"Uploaded successfully — {len(st.session_state['input_df'])} rows × {len(st.session_state['input_df'].columns)} columns")
+        except Exception as e:
+            st.error(f"Could not read CSV: {e}")
 
 # ────────────────────────────────────────────────────────────────────────────
 # RAW DATA PREVIEW
