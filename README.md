@@ -161,7 +161,7 @@ A **Result Filters** section (Severity, Grade, DQ Score range) applies across al
 
 ### Tab 1 — Dashboard
 
-![Dashboard](docs/screenshots/Dashbaord.png)
+![Dashboard](docs/screenshots/dashboard.jpg)
 
 Five headline KPIs at a glance:
 
@@ -190,7 +190,7 @@ Grade distribution: A 21.9% · B 35.5% · C 31.4% · D 7.7% · F 3.5%
 
 ### Tab 2 — Dimension Analysis
 
-![Dimension Analysis](docs/screenshots/Dimension%20Analysis.png)
+![Dimension Analysis](docs/screenshots/dimension_analysis.jpg)
 
 Five metric tiles with progress bars — one per dimension — give an instant read on where quality breaks down:
 
@@ -223,7 +223,7 @@ A **horizontal bar chart** ranks dimensions visually. Below it, a **Top Failing 
 
 ### Tab 3 — Record Explorer
 
-![Record Explorer](docs/screenshots/Record%20Explorer.png)
+![Record Explorer](docs/screenshots/record_explorer.jpg)
 
 A sortable, scrollable table of every record with inline **progress bars** for all six score columns — no matplotlib required, using Streamlit's native `ProgressColumn`.
 
@@ -235,7 +235,7 @@ Sort by any score column, ascending (worst first) or descending — useful for t
 
 ### Tab 4 — Deep Dive
 
-![Deep Dive](docs/screenshots/Deep%20Dive.png)
+![Deep Dive](docs/screenshots/deep_dive.jpg)
 
 Select any invoice number to inspect it in full detail:
 
@@ -252,7 +252,7 @@ Issues: Amount exceeds max threshold · Total exceeds max threshold · Amount is
 
 ### Tab 5 — Statistics
 
-![Statistics](docs/screenshots/Statistics.png)
+![Statistics](docs/screenshots/statistics.jpg)
 
 Two plain tables — no charts, just numbers:
 
@@ -277,7 +277,7 @@ Two plain tables — no charts, just numbers:
 
 ### Tab 6 — Export
 
-![Export](docs/screenshots/Export.png)
+![Export](docs/screenshots/export.jpg)
 
 Two download options:
 
