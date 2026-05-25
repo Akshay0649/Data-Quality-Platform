@@ -470,11 +470,21 @@ sort_asc = st.checkbox("Ascending (worst first)", value=True)
 table_df = df[display_cols].sort_values(sort_col, ascending=sort_asc).reset_index(drop=True)
 
 st.dataframe(
-    table_df.style.background_gradient(subset=["dq_score"], cmap="RdYlGn", vmin=0, vmax=100)
-                  .background_gradient(subset=["dq_score_accuracy"], cmap="RdYlGn", vmin=0, vmax=100)
-                  .background_gradient(subset=["dq_score_validity"], cmap="RdYlGn", vmin=0, vmax=100),
+    table_df,
     use_container_width=True,
     height=400,
+    column_config={
+        "dq_score": st.column_config.ProgressColumn(
+            "dq_score", min_value=0, max_value=100, format="%d"),
+        "dq_score_accuracy": st.column_config.ProgressColumn(
+            "dq_score_accuracy", min_value=0, max_value=100, format="%d"),
+        "dq_score_validity": st.column_config.ProgressColumn(
+            "dq_score_validity", min_value=0, max_value=100, format="%d"),
+        "dq_score_completeness": st.column_config.ProgressColumn(
+            "dq_score_completeness", min_value=0, max_value=100, format="%d"),
+        "dq_score_consistency": st.column_config.ProgressColumn(
+            "dq_score_consistency", min_value=0, max_value=100, format="%d"),
+    },
 )
 
 st.divider()
