@@ -190,7 +190,7 @@ Grade distribution: A 21.9% · B 35.5% · C 31.4% · D 7.7% · F 3.5%
 
 ### Tab 2 — Dimension Analysis
 
-![Dimension Analysis](docs/screenshots/dimension_analysis.jpg)
+![Dimension Analysis](docs/screenshots/dimension_analysis)
 
 Five metric tiles with progress bars — one per dimension — give an instant read on where quality breaks down:
 
