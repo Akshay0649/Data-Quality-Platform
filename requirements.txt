@@ -1,5 +1,4 @@
 # Finance Data Cleaning Pipeline — Dependencies
-# Install with: pip install -r requirements.txt
 
 # Core data processing
 pandas>=2.0.0
@@ -8,8 +7,9 @@ numpy>=1.24.0
 # Database connectivity
 sqlalchemy>=2.0.0
 
-# SQL Server / Azure SQL support (comment out if only using demo mode)
+# SQL Server / Azure SQL (comment out if only using demo mode)
 pyodbc>=4.0.39
 
-# Optional: faster Parquet export support (uncomment if needed)
-# pyarrow>=12.0.0
+# Streamlit app
+streamlit>=1.35.0
+plotly>=5.20.0
