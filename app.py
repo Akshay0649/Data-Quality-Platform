@@ -56,174 +56,109 @@ PASTEL = {
 }
 
 def _chart_layout(**kw):
-    """Base Plotly layout — light matte, clean, branded."""
+    """Base Plotly layout — clean light theme. Pass any plotly layout keys as kwargs."""
     base = dict(
         template="plotly_white",
         paper_bgcolor=CHART_BG,
         plot_bgcolor=CHART_PLOT,
         font=dict(color=CHART_FONT, family="Inter, system-ui, sans-serif", size=12),
-        margin=dict(t=28, b=28, l=16, r=16),
+        margin=dict(t=32, b=32, l=16, r=32),
         showlegend=False,
-        xaxis=dict(showgrid=True, gridcolor="#f1f5f9", zeroline=False),
-        yaxis=dict(showgrid=True, gridcolor="#f1f5f9", zeroline=False),
     )
-    base.update(kw)
+    base.update(kw)  # caller kwargs win — no conflicts
     return base
 
-def kpi_card(label, value, subtitle="", color="#818cf8", icon="", bg=""):
-    """Matte pastel KPI card."""
-    # derive a very soft tint from the accent color for background
-    bg_color = bg if bg else "rgba(241,245,249,0.8)"
-    sub_html = f'<p style="color:#94a3b8;font-size:11px;margin:6px 0 0;line-height:1.4;">{subtitle}</p>' if subtitle else ""
-    return f"""
-<div style="background:{bg_color};border-radius:16px;padding:22px 24px;
-            border:1.5px solid rgba(0,0,0,0.05);border-top:4px solid {color};
-            box-shadow:0 2px 12px rgba(0,0,0,0.05);">
-  <p style="color:#94a3b8;font-size:10px;font-weight:700;letter-spacing:1.2px;
-             text-transform:uppercase;margin:0 0 10px;">{icon}&nbsp;{label}</p>
-  <p style="color:#1e293b;font-size:28px;font-weight:800;margin:0;line-height:1;">{value}</p>
-  {sub_html}
-</div>"""
+# Shared axis defaults (use directly in update_layout)
+_GRID_X = dict(showgrid=True,  gridcolor="#f1f5f9", zeroline=False, tickfont=dict(color="#94a3b8"))
+_GRID_Y = dict(showgrid=True,  gridcolor="#f1f5f9", zeroline=False, tickfont=dict(color="#94a3b8"))
+_NO_GRID_Y = dict(showgrid=False, zeroline=False, tickfont=dict(color="#94a3b8"))
+
+def kpi_card(label, value, subtitle="", color="#6366F1", icon="", bg=""):
+    """Clean KPI card — white background, coloured top border."""
+    ico_html = f"{icon} " if icon else ""
+    sub_html = f'<p style="color:#94A3B8;font-size:11px;margin:5px 0 0;">{subtitle}</p>' if subtitle else ""
+    return (
+        f'<div style="background:#fff;border-radius:12px;padding:18px 20px;'
+        f'border:1px solid #E2E8F0;border-top:4px solid {color};'
+        f'box-shadow:0 1px 6px rgba(0,0,0,0.05);height:100%;">'
+        f'<p style="color:#94A3B8;font-size:10px;font-weight:700;'
+        f'letter-spacing:1px;text-transform:uppercase;margin:0 0 8px;">'
+        f'{ico_html}{label}</p>'
+        f'<p style="color:#1E293B;font-size:26px;font-weight:800;margin:0;line-height:1;">'
+        f'{value}</p>{sub_html}</div>'
+    )
 
 def section_head(title, subtitle=""):
-    sub = f'<p style="color:#94a3b8;font-size:13px;margin:4px 0 0;">{subtitle}</p>' if subtitle else ""
-    return f"""
-<div style="margin:28px 0 18px;">
-  <h3 style="color:#1e293b;font-size:17px;font-weight:700;margin:0;">{title}</h3>
-  {sub}
-</div>"""
+    sub = f'<p style="color:#94A3B8;font-size:12px;margin:3px 0 0;">{subtitle}</p>' if subtitle else ""
+    return (f'<div style="margin:20px 0 12px;">' +
+            f'<h3 style="color:#1E293B;font-size:16px;font-weight:700;margin:0;">{title}</h3>' +
+            sub + "</div>")
 
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-/* ── Global canvas ───────────────────────────────────────────────────────── */
-html, body,
-[data-testid="stAppViewContainer"],
-[data-testid="stAppViewContainer"] > .main {
-    background: #f0f2f9 !important;
-    font-family: 'Inter', system-ui, sans-serif !important;
-}
-[data-testid="block-container"] {
-    padding-top: 1.2rem !important;
-    padding-bottom: 2rem !important;
-}
+* { font-family: 'Inter', sans-serif !important; box-sizing: border-box; }
 
-/* ── Typography ──────────────────────────────────────────────────────────── */
-h1,h2,h3,h4 { color: #1e293b !important; font-family: 'Inter', sans-serif !important; }
-p, li, label, span { color: #64748b; font-family: 'Inter', sans-serif !important; }
+/* Background */
+[data-testid="stAppViewContainer"] > .main,
+[data-testid="stAppViewContainer"] { background: #F8FAFC !important; }
+[data-testid="block-container"] { padding-top: 1rem !important; }
 
-/* ── Tabs ────────────────────────────────────────────────────────────────── */
+/* Sidebar */
+[data-testid="stSidebar"] { background: #FFFFFF !important; border-right: 1px solid #E2E8F0 !important; }
+
+/* Tabs */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 4px !important;
-    background: #e8eaf6 !important;
-    padding: 5px 6px !important;
-    border-radius: 14px !important;
-    border: none !important;
+    background: #EEF2FF !important; padding: 4px !important; border-radius: 12px !important; gap: 2px !important;
 }
 .stTabs [data-baseweb="tab"] {
-    border-radius: 10px !important;
-    padding: 9px 18px !important;
-    font-weight: 600 !important;
-    font-size: 13px !important;
-    color: #64748b !important;
-    border: none !important;
-    background: transparent !important;
-    transition: all 0.15s ease !important;
+    border-radius: 9px !important; padding: 8px 16px !important; color: #64748B !important;
+    font-weight: 600 !important; font-size: 13px !important; border: none !important;
 }
 .stTabs [aria-selected="true"] {
-    background: #ffffff !important;
-    color: #6366f1 !important;
-    box-shadow: 0 2px 10px rgba(99,102,241,0.15) !important;
+    background: #6366F1 !important; color: #FFFFFF !important;
+    box-shadow: 0 2px 8px rgba(99,102,241,0.3) !important;
 }
 
-/* ── Sidebar ─────────────────────────────────────────────────────────────── */
-[data-testid="stSidebar"] {
-    background: #ffffff !important;
-    border-right: 1px solid #e2e8f0 !important;
-    box-shadow: 2px 0 12px rgba(0,0,0,0.04) !important;
-}
-[data-testid="stSidebar"] h1,[data-testid="stSidebar"] h2,
-[data-testid="stSidebar"] h3 { color: #1e293b !important; }
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] label { color: #64748b !important; }
-
-/* ── Primary button ─────────────────────────────────────────────────────── */
+/* Run button */
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%) !important;
-    border: none !important; border-radius: 12px !important;
-    color: #fff !important; font-weight: 700 !important;
-    font-size: 15px !important; padding: 14px 20px !important;
-    box-shadow: 0 4px 16px rgba(99,102,241,0.35) !important;
-    transition: all 0.2s ease !important;
-    letter-spacing: 0.3px !important;
+    background: linear-gradient(135deg, #6366F1, #8B5CF6) !important;
+    color: #fff !important; border: none !important; border-radius: 10px !important;
+    font-weight: 700 !important; font-size: 15px !important;
+    box-shadow: 0 4px 14px rgba(99,102,241,0.35) !important;
+    transition: all 0.2s !important;
 }
-.stButton > button[kind="primary"]:hover {
-    box-shadow: 0 8px 24px rgba(99,102,241,0.5) !important;
-    transform: translateY(-2px) !important;
-}
+.stButton > button[kind="primary"]:hover { transform: translateY(-1px) !important; box-shadow: 0 6px 20px rgba(99,102,241,0.5) !important; }
 
-/* ── Download button ─────────────────────────────────────────────────────── */
+/* Secondary buttons (type filter cards) */
+.stButton > button[kind="secondary"] {
+    border-radius: 10px !important; border: 1.5px solid #E2E8F0 !important;
+    background: #FFFFFF !important; color: #1E293B !important;
+    font-weight: 600 !important; font-size: 13px !important;
+    transition: all 0.15s !important; width: 100% !important;
+    text-align: left !important; padding: 12px 16px !important;
+}
+.stButton > button[kind="secondary"]:hover { border-color: #6366F1 !important; color: #6366F1 !important; }
+
+/* Download button */
 .stDownloadButton > button {
-    background: #eef2ff !important; color: #6366f1 !important;
-    border: 1.5px solid #c7d2fe !important;
-    border-radius: 10px !important; font-weight: 600 !important;
-    transition: all 0.15s !important;
-}
-.stDownloadButton > button:hover {
-    background: #6366f1 !important; color: #fff !important;
-    border-color: #6366f1 !important;
+    background: #EEF2FF !important; color: #6366F1 !important;
+    border: 1.5px solid #C7D2FE !important; border-radius: 10px !important; font-weight: 600 !important;
 }
 
-/* ── Inputs ──────────────────────────────────────────────────────────────── */
-[data-testid="stTextInput"] input,
-[data-testid="stNumberInput"] input {
-    background: #f8fafc !important; color: #1e293b !important;
-    border: 1.5px solid #e2e8f0 !important; border-radius: 10px !important;
-}
-[data-testid="stTextInput"] input:focus,
-[data-testid="stNumberInput"] input:focus {
-    border-color: #818cf8 !important;
-    box-shadow: 0 0 0 3px rgba(129,140,248,0.15) !important;
-}
+/* Inputs */
+input, textarea { background: #F8FAFC !important; border-radius: 8px !important; color: #1E293B !important; }
 
-/* ── Multiselect / selectbox ─────────────────────────────────────────────── */
-.stMultiSelect [data-baseweb="select"] > div,
-.stSelectbox [data-baseweb="select"] > div {
-    background: #f8fafc !important;
-    border: 1.5px solid #e2e8f0 !important;
-    border-radius: 10px !important;
-    color: #1e293b !important;
-}
+/* Expanders */
+details { background: #FFFFFF !important; border: 1px solid #E2E8F0 !important; border-radius: 10px !important; }
 
-/* ── Expander ────────────────────────────────────────────────────────────── */
-details {
-    background: #ffffff !important;
-    border: 1.5px solid #e2e8f0 !important;
-    border-radius: 12px !important;
-    box-shadow: 0 1px 6px rgba(0,0,0,0.04) !important;
-}
-summary { color: #475569 !important; font-weight: 600 !important; }
+/* Dividers */
+hr { border-color: #E2E8F0 !important; }
 
-/* ── Dividers ────────────────────────────────────────────────────────────── */
-hr { border-color: #e2e8f0 !important; margin: 1.4rem 0 !important; }
-
-/* ── Success / info / warning banners ───────────────────────────────────── */
-.stSuccess  { background: #f0fdf4 !important; border-radius: 10px !important; color: #166534 !important; }
-.stInfo     { background: #eff6ff !important; border-radius: 10px !important; color: #1e40af !important; }
-.stWarning  { background: #fffbeb !important; border-radius: 10px !important; color: #92400e !important; }
-
-/* ── Dataframe ───────────────────────────────────────────────────────────── */
-[data-testid="stDataFrame"] { border-radius: 12px !important; overflow: hidden; }
-
-/* ── Slider ──────────────────────────────────────────────────────────────── */
-[data-testid="stSlider"] [role="slider"] {
-    background: #6366f1 !important;
-    box-shadow: 0 0 0 4px rgba(99,102,241,0.2) !important;
-}
-
-/* ── Caption ─────────────────────────────────────────────────────────────── */
-.stCaption, small { color: #94a3b8 !important; font-size: 12px !important; }
+/* Success/info */
+.stSuccess { border-radius: 10px !important; }
+.stInfo    { border-radius: 10px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -749,10 +684,10 @@ def run_scoring(df: pd.DataFrame, col_mapping: dict) -> tuple:
 # APP HEADER
 # ═══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
-<div style="background:linear-gradient(135deg,#eef2ff 0%,#faf5ff 50%,#f0fdf4 100%);
-            border-radius:20px;padding:28px 36px;margin-bottom:24px;
-            border:1.5px solid #e0e7ff;
-            box-shadow:0 4px 24px rgba(99,102,241,0.08);">
+<div style="background:linear-gradient(135deg,#EEF2FF 0%,#F5F3FF 100%);
+            border-radius:16px;padding:24px 32px;margin-bottom:20px;
+            border:1.5px solid #E0E7FF;
+            box-shadow:0 2px 16px rgba(99,102,241,0.08);">
   <div style="display:flex;align-items:center;gap:20px;">
     <div style="background:linear-gradient(135deg,#818cf8,#a78bfa);
                 border-radius:16px;width:58px;height:58px;display:flex;
@@ -963,9 +898,10 @@ if "input_df" in st.session_state:
                 hovertemplate="<b>%{x}</b><br>%{y:.1f}% missing<extra></extra>",
             )
             fig_null.update_layout(
-                **_chart_layout(height=300),
-                xaxis_title=None, yaxis_title="% Missing",
-                coloraxis_showscale=False, bargap=0.35,
+                **_chart_layout(height=300, coloraxis_showscale=False),
+                xaxis=dict(**_GRID_X, title=None),
+                yaxis=dict(**_GRID_Y, title="% Missing"),
+                bargap=0.35,
             )
             st.plotly_chart(fig_null, use_container_width=True)
 
@@ -1088,13 +1024,45 @@ if "scored_df" in st.session_state:
     with tab1:
         st.subheader("Column type breakdown")
         type_counts = Counter(det_types.values())
+        # ── Interactive type filter cards ─────────────────────────────────────
+        if "profile_type_filter" not in st.session_state:
+            st.session_state["profile_type_filter"] = "all"
+
         tk2 = st.columns(6)
         for i, (dtype, meta) in enumerate(COL_TYPE_META.items()):
+            cnt = type_counts.get(dtype, 0)
+            is_active = st.session_state["profile_type_filter"] == dtype
+            border_style = f"4px solid {meta['color']}" if is_active else f"4px solid {meta['color']}44"
+            bg_style     = f"{meta['color']}12" if is_active else "#ffffff"
             with tk2[i]:
-                st.markdown(kpi_card(
-                    meta["label"], type_counts.get(dtype, 0),
-                    color=meta["color"], icon=meta["icon"]
-                ), unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="background:{bg_style};border-radius:12px;padding:16px 14px;' +
+                    f'border:1px solid #E2E8F0;border-top:{border_style};' +
+                    f'box-shadow:0 1px 6px rgba(0,0,0,0.05);cursor:pointer;margin-bottom:4px;">' +
+                    f'<p style="color:#94A3B8;font-size:10px;font-weight:700;' +
+                    f'letter-spacing:1px;text-transform:uppercase;margin:0 0 6px;">' +
+                    f'{meta["icon"]} {meta["label"]}</p>' +
+                    f'<p style="color:#1E293B;font-size:24px;font-weight:800;margin:0;">{cnt}</p>' +
+                    f'<p style="font-size:10px;color:{meta["color"]};margin:4px 0 0;font-weight:600;">' +
+                    ('● Active' if is_active else '○ Click to filter') + "</p></div>",
+                    unsafe_allow_html=True
+                )
+                if st.button(
+                    "All" if is_active else "Filter",
+                    key=f"type_btn_{dtype}",
+                    help=f"Filter profile table to {meta['label']} columns",
+                    use_container_width=True,
+                ):
+                    if is_active:
+                        st.session_state["profile_type_filter"] = "all"
+                    else:
+                        st.session_state["profile_type_filter"] = dtype
+                    st.rerun()
+
+        active_filter = st.session_state["profile_type_filter"]
+        if active_filter != "all":
+            active_meta = COL_TYPE_META.get(active_filter, {})
+            st.info(f"{active_meta.get('icon','')} Showing only **{active_meta.get('label',active_filter)}** columns — click the active card again to clear.")
 
         st.divider()
         st.subheader("Role mapping (used by pipeline)")
@@ -1109,9 +1077,13 @@ if "scored_df" in st.session_state:
         for c in col_mapping.get("categorical_columns",[]): r4.markdown(f"• `{c}`")
 
         st.divider()
-        st.subheader("Full column profile")
+        st.divider()
+        filter_label = COL_TYPE_META.get(active_filter, {}).get("label", "All") if active_filter != "all" else "All"
+        st.subheader(f"Full column profile — {filter_label}" if active_filter != "all" else "Full column profile")
         profiles  = profile_dataframe(input_df, json.dumps(det_types))
         prof_df2  = pd.DataFrame(profiles)
+        if active_filter != "all":
+            prof_df2 = prof_df2[prof_df2["type"] == active_filter]
         disp_cols = ["column","type","null_pct","unique_count","unique_pct","sample","min","max","mean","zero_pct","neg_pct"]
         st.dataframe(
             prof_df2[[c for c in disp_cols if c in prof_df2.columns]],
@@ -1144,12 +1116,17 @@ if "scored_df" in st.session_state:
         avg_score = df_f["dq_score"].mean()
         score_color = "#22c55e" if avg_score>=85 else "#f59e0b" if avg_score>=65 else "#ef4444"
         k1,k2,k3,k4,k5 = st.columns(5)
-        with k1: st.markdown(kpi_card("Total Records",    f"{len(df_f):,}",    "in your dataset",      "#6366f1", "📁"), unsafe_allow_html=True)
-        with k2: st.markdown(kpi_card("Quality Score",    f"{avg_score:.1f}",  "out of 100",           score_color,"⭐"), unsafe_allow_html=True)
-        with k3: st.markdown(kpi_card("Ready to Use",     int((df_f["dq_score"]>=99).sum()),  "clean records",  "#22c55e","✅"), unsafe_allow_html=True)
-        with k4: st.markdown(kpi_card("Act Now",          int((df_f["dq_severity"]=="CRITICAL").sum()), "critical records", "#ef4444","🔴"), unsafe_allow_html=True)
-        with k5: st.markdown(kpi_card("Weakest Area",     f"{lowest_dim[1]:.0f}/100", lowest_dim[0],   "#f59e0b","⚠️"), unsafe_allow_html=True)
-        st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+        cards = [
+            ("Total Records",   f"{len(df_f):,}",                                 "in your dataset",    "#6366F1", "📁"),
+            ("Quality Score",   f"{avg_score:.1f} / 100",                          "overall average",    score_color,"⭐"),
+            ("Ready to Use",    f"{int((df_f['dq_score']>=99).sum()):,}",         "clean records",      "#22C55E", "✅"),
+            ("Act Now",         f"{int((df_f['dq_severity']=='CRITICAL').sum()):,}","critical records", "#EF4444", "🔴"),
+            ("Weakest Area",    f"{lowest_dim[1]:.0f} / 100",                      lowest_dim[0],        "#F59E0B", "⚠️"),
+        ]
+        for col_obj, (lbl, val, sub, clr, ico) in zip([k1,k2,k3,k4,k5], cards):
+            with col_obj:
+                st.markdown(kpi_card(lbl, val, sub, clr, ico), unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
         # ── Severity + Grade side by side ──────────────────────────────────────
         PASTEL_SEV = {"CLEAN":"#86efac","LOW":"#fde68a","MEDIUM":"#fed7aa",
@@ -1171,7 +1148,8 @@ if "scored_df" in st.session_state:
             )
             fig_sev.update_layout(
                 **_chart_layout(height=320),
-                xaxis_title=None, yaxis_title="Records",
+                xaxis=dict(**_GRID_X, title=None),
+                yaxis=dict(**_GRID_Y, title="Records"),
                 bargap=0.35,
             )
             sev_event = st.plotly_chart(fig_sev, use_container_width=True,
@@ -1189,8 +1167,11 @@ if "scored_df" in st.session_state:
                 hovertemplate="Grade <b>%{label}</b><br>%{value:,} records (%{percent})<extra></extra>",
                 pull=[0.04,0,0,0,0],
             )
-            fig_grd.update_layout(**_chart_layout(height=320, showlegend=True),
-                                  legend=dict(orientation="h", y=-0.15, font_color="#64748b"))
+            fig_grd.update_layout(
+                **_chart_layout(height=320, showlegend=True,
+                                legend=dict(orientation="h", y=-0.15,
+                                            font=dict(color="#64748b"))),
+            )
             st.plotly_chart(fig_grd, use_container_width=True)
 
         # ── INTERACTIVE: click severity bar → filter records inline ────────────
@@ -1234,9 +1215,12 @@ if "scored_df" in st.session_state:
                            line_color="#6366f1", line_width=2,
                            annotation_text=f"Avg {df_f['dq_score'].mean():.0f}",
                            annotation_font_color="#6366f1", annotation_position="top right")
-        fig_hist.update_layout(**_chart_layout(height=280),
-                               xaxis_title="Quality Score (0–100)", yaxis_title="Records",
-                               bargap=0.05)
+        fig_hist.update_layout(
+            **_chart_layout(height=280),
+            xaxis=dict(**_GRID_X, title="Quality Score (0–100)"),
+            yaxis=dict(**_GRID_Y, title="Records"),
+            bargap=0.05,
+        )
         st.plotly_chart(fig_hist, use_container_width=True)
 
     # =========================================================================
@@ -1252,19 +1236,20 @@ if "scored_df" in st.session_state:
         }
         weights = {"Missing Data":"20%","Format Accuracy":"25%","Value Accuracy":"35%",
                    "Data Consistency":"15%","Duplicate Check":"5%"}
+        DIM_COLORS_MAP = {
+            "Missing Data":"#6366F1","Format Accuracy":"#0EA5E9",
+            "Value Accuracy":"#10B981","Data Consistency":"#F59E0B","Duplicate Check":"#EF4444"
+        }
         DIM_ICONS = {
             "Missing Data":"🕳️","Format Accuracy":"✅","Value Accuracy":"🎯",
             "Data Consistency":"🔗","Duplicate Check":"🪪"
         }
-        DIM_PASTEL = {
-            "Missing Data":"#818cf8","Format Accuracy":"#2dd4bf",
-            "Value Accuracy":"#34d399","Data Consistency":"#fbbf24","Duplicate Check":"#fb7185"
-        }
         d1,d2,d3,d4,d5 = st.columns(5)
         for col_obj, (dim, avg) in zip([d1,d2,d3,d4,d5], dim_avgs.items()):
-            clr = DIM_PASTEL.get(dim, "#818cf8")
+            clr = DIM_COLORS_MAP.get(dim, "#6366F1")
             ico = DIM_ICONS.get(dim, "📊")
-            sub = f"Weight: {weights[dim]} · {'✅ Good' if avg>=80 else '⚠️ Needs work' if avg>=60 else '🔴 Critical'}"
+            status = "✅ Good" if avg>=80 else ("⚠️ Needs work" if avg>=60 else "🔴 Critical")
+            sub = f"{weights[dim]} weight · {status}"
             with col_obj:
                 st.markdown(kpi_card(dim, f"{avg:.1f}", sub, clr, ico), unsafe_allow_html=True)
 
@@ -1289,9 +1274,9 @@ if "scored_df" in st.session_state:
             hovertemplate="<b>%{y}</b><br>Score: %{x:.1f}/100<br>Weight: %{customdata[0]}<extra></extra>",
         )
         fig_dim.update_layout(
-            **_chart_layout(height=340, showlegend=False),
-            xaxis_title="Score (0–100)", yaxis_title=None,
-            yaxis=dict(showgrid=False),
+            **_chart_layout(height=340),
+            xaxis=dict(**_GRID_X, title="Score (0–100)"),
+            yaxis=dict(**_NO_GRID_Y),
             bargap=0.35,
         )
         # Add a vertical "target" line at 80
@@ -1327,10 +1312,12 @@ if "scored_df" in st.session_state:
                 hovertemplate="<b>%{y}</b><br>%{x:,} records affected<extra></extra>",
             )
             fig_iss.update_layout(
-                **_chart_layout(height=420, showlegend=True),
-                xaxis_title="Records affected", yaxis_title=None,
+                **_chart_layout(height=420, showlegend=True,
+                                legend=dict(orientation="h", y=1.08,
+                                            font=dict(color="#64748b", size=11))),
+                xaxis=dict(**_GRID_X, title="Records affected"),
+                yaxis=dict(**_NO_GRID_Y),
                 bargap=0.3,
-                legend=dict(orientation="h", y=1.08, font_color="#64748b", font_size=11),
             )
             st.plotly_chart(fig_iss, use_container_width=True)
         else:
@@ -1551,7 +1538,8 @@ if "scored_df" in st.session_state:
                                   annotation_position="top right")
                 fig_iso.update_layout(
                     **_chart_layout(height=350),
-                    xaxis_title="AI Risk Score (0–100)", yaxis_title="Records",
+                    xaxis=dict(**_GRID_X, title="AI Risk Score (0–100)"),
+                    yaxis=dict(**_GRID_Y, title="Records"),
                     bargap=0.05,
                 )
                 st.plotly_chart(fig_iso, use_container_width=True)
@@ -1590,9 +1578,10 @@ if "scored_df" in st.session_state:
                         hovertemplate="<b>%{x}</b><br>%{y:,} records out of range<extra></extra>",
                     )
                     fig_iqr.update_layout(
-                        **_chart_layout(height=350),
-                        xaxis_title=None, yaxis_title="Records out of normal range",
-                        coloraxis_showscale=False, bargap=0.35,
+                        **_chart_layout(height=350, coloraxis_showscale=False),
+                        xaxis=dict(**_GRID_X, title=None),
+                        yaxis=dict(**_GRID_Y, title="Records out of normal range"),
+                        bargap=0.35,
                     )
                     st.plotly_chart(fig_iqr, use_container_width=True)
                 else:
