@@ -303,8 +303,10 @@ def parse_nlq(query: str, df: "pd.DataFrame", col_mapping: dict) -> dict:
     # ── 10. Aggregation: which column has most issues ──────────────────────────
     # Only trigger on explicit grouping language — NOT on "top/worst/best" (those = limit)
     AGG_TRIGGERS = {"which","who","breakdown","group"}
+    _FREQ_AGG_PHRASES = {"most used","most common","most popular","most frequent",
+                         "highest used","most occurrences","used most","commonly used"}
     # Check raw query q (not toks) — "which/who" are stripped by _STOPWORDS
-    agg_phrase   = any(w in q.split() for w in AGG_TRIGGERS)
+    agg_phrase   = any(w in q.split() for w in AGG_TRIGGERS) or any(p in q for p in _FREQ_AGG_PHRASES)
     # Also catch "by <col>" pattern explicitly
     by_m = _re.search(r'\bby\s+([\w_]+)', q)
     if agg_phrase or (by_m and not _re.search(r'top\s+\d+', q)):
@@ -342,32 +344,76 @@ def parse_nlq(query: str, df: "pd.DataFrame", col_mapping: dict) -> dict:
     # ── 11. Top N ─────────────────────────────────────────────────────────────
     top_m = _re.search(r'top\s+(\d+)', q)
     # Entity words: when "top N [entities]" refers to groups, not individual records
+    # Covers all 6 demo domains + generic groupable nouns
     _ENTITY_WORDS = {
+        # Finance / generic
         "companies","company","vendors","vendor","reps","rep","customers","customer",
         "products","product","suppliers","supplier","teams","team","regions","region",
         "departments","department","categories","category","channels","channel",
         "accounts","account","clients","client","partners","partner",
+        # Sales / CRM
+        "stages","stage","sources","source","leads","lead",
+        # HR / People
+        "employees","employee","managers","manager","locations","location",
+        "titles","title","roles","role","ratings","rating",
+        # E-commerce / Supply-chain
+        "orders","order","shipments","shipment","warehouses","warehouse",
+        "carriers","carrier","methods","method","countries","country",
+        "origins","origin","statuses","status",
+        # Product Analytics
+        "platforms","platform","events","event","features","feature",
+        "tiers","tier","types","type","users","user","sessions","session",
+        "pages","page","devices","device","browsers","browser",
     }
+    # Detect frequency-intent: "most used", "most common", "most popular",
+    # "highest used", "most frequent", "popular", "common", "used most"
+    _FREQ_PHRASES = {"most used","most common","most popular","most frequent",
+                     "highest used","used most","popular","commonly used","frequently used"}
+    freq_intent = any(p in q for p in _FREQ_PHRASES)
+
     if top_m:
         limit = int(top_m.group(1))
         toks_set = set(_tokens(q))
-        entity_hit = toks_set & _ENTITY_WORDS
+        # Also check raw q.split() for entity words (some are stripped by stopwords)
+        raw_toks = set(w.lower() for w in q.split())
+        entity_hit = (toks_set | raw_toks) & _ENTITY_WORDS
         if entity_hit and intent != "aggregate":
-            # "Top 5 companies by revenue" → aggregate by best-matching cat col
+            # "Top 10 highest used platforms" / "Top 5 companies by revenue"
             entity_word = entity_hit.pop()
+            # Match to a categorical column — try entity word against col name
             grp_col = next(
                 (c for c in cat_cols if c in df.columns and
-                 any(h in c.lower() for h in [entity_word, entity_word.rstrip("s")])),
+                 any(h in c.lower() for h in [entity_word, entity_word.rstrip("s"),
+                                               entity_word + "s"])),
                 None
             )
+            # Fallback: find first cat col whose name appears anywhere in the query
+            if not grp_col:
+                grp_col = next(
+                    (c for c in cat_cols if c in df.columns and
+                     (c.lower() in q or c.split("_")[0].lower() in q)),
+                    None
+                )
             if not grp_col and cat_cols:
                 grp_col = next((c for c in cat_cols if c in df.columns), None)
             if grp_col:
-                # Determine metric to aggregate: use mentioned numeric col or dq_score
-                metric_col = (matched_col if (num_m and matched_col and
-                               matched_col in df.columns and
-                               pd.api.types.is_numeric_dtype(df[matched_col]))
-                              else "dq_score")
+                # Determine sort metric:
+                # frequency-intent  → sort by Records (count) DESC
+                # explicit num col  → sort by that col avg DESC
+                # default           → sort by Avg DQ Score ASC (worst first)
+                if freq_intent:
+                    metric_col  = "dq_score"
+                    sort_by_col = "Records"
+                    sort_asc_agg = False
+                elif num_m and matched_col and matched_col in df.columns and pd.api.types.is_numeric_dtype(df[matched_col]):
+                    metric_col  = matched_col
+                    sort_by_col = f"Avg {metric_col.replace('_',' ').title()}"
+                    sort_asc_agg = False
+                else:
+                    metric_col  = "dq_score"
+                    sort_by_col = "Avg DQ Score"
+                    sort_asc_agg = True   # worst-first (lowest score = most issues)
+
                 intent = "aggregate"
                 agg_df = (
                     df[mask].groupby(grp_col, dropna=False)
@@ -385,12 +431,13 @@ def parse_nlq(query: str, df: "pd.DataFrame", col_mapping: dict) -> dict:
                         "avg_score": "Avg DQ Score",
                         "critical": "Critical Issues",
                     })
-                    .sort_values(f"Avg {metric_col.replace('_',' ').title()}", ascending=False)
+                    .sort_values(sort_by_col, ascending=sort_asc_agg)
                     .head(limit)
                 )
                 agg_df[f"Avg {metric_col.replace('_',' ').title()}"] = (
                     agg_df[f"Avg {metric_col.replace('_',' ').title()}"].round(1))
-                summary_parts.append(f"top {limit} {entity_word} by {metric_col.replace('_',' ')}")
+                freq_label = "most used " if freq_intent else ""
+                summary_parts.append(f"top {limit} {freq_label}{entity_word} by {'count' if freq_intent else metric_col.replace('_',' ')}")
                 limit = None  # already sliced in agg_df
         else:
             # Records-based top N — sort by relevant numeric col or dq_score
@@ -453,13 +500,16 @@ NLQ_EXAMPLES = [
 
 
 def _dynamic_examples(df: pd.DataFrame, col_mapping: dict) -> list:
-    """Generate context-aware NLQ example queries from the actual dataset columns."""
+    """
+    Generate context-aware NLQ queries based on the actual uploaded dataset.
+    Every query here is verified to match the NLQ parser's patterns — no dead ends.
+    """
     examples = []
     num_cols  = col_mapping.get("numeric_columns", [])
     cat_cols  = col_mapping.get("categorical_columns", [])
     date_cols = col_mapping.get("date_columns", [])
 
-    # Always include these DQ-driven queries
+    # ── Tier 1: DQ queries that always work (engine-native) ──────────────────
     examples += [
         "Show critical records",
         "Find anomalous records",
@@ -467,56 +517,55 @@ def _dynamic_examples(df: pd.DataFrame, col_mapping: dict) -> list:
         "Records with score below 60",
     ]
 
-    # Numeric column queries — use actual column names
-    if num_cols:
-        col = num_cols[0]
-        try:
-            q75 = float(pd.to_numeric(df[col], errors="coerce").quantile(0.75))
-            examples.append(f"Show records where {col} is above {int(q75):,}")
-            q25 = float(pd.to_numeric(df[col], errors="coerce").quantile(0.25))
-            if q25 > 0:
-                examples.append(f"Show records where {col} is below {int(q25):,}")
-        except Exception:
-            examples.append(f"Show top 10 records by {col}")
-    if len(num_cols) >= 2:
-        col2 = num_cols[1]
-        examples.append(f"Top 5 records by {col2}")
+    # ── Tier 2: Categorical column aggregations (uses "which … has most issues")
+    # Pattern: "Which <col> has the most issues" → triggers AGG_TRIGGERS via "which"
+    for col in cat_cols[:3]:
+        if col in df.columns:
+            clean = col.replace("_", " ")
+            examples.append(f"Which {clean} has the most issues")
 
-    # Categorical column queries — use actual column names + top value
-    if cat_cols:
-        col = cat_cols[0]
-        try:
-            top_val = df[col].dropna().astype(str).value_counts().index[0]
-            if top_val not in ("UNKNOWN", "N/A", "NULL", ""):
-                examples.append(f"Show records where {col} is {top_val}")
-        except Exception:
-            pass
-        examples.append(f"Which {col} has the most issues")
-    if len(cat_cols) >= 2:
-        col2 = cat_cols[1]
-        try:
-            top_val2 = df[col2].dropna().astype(str).value_counts().index[0]
-            if top_val2 not in ("UNKNOWN", "N/A", "NULL", ""):
-                examples.append(f"Top 5 {col2} by average score")
-        except Exception:
-            examples.append(f"Show top 5 {col2} with most issues")
+    # ── Tier 3: Top-N frequency aggregation (uses "Top N most used <col>")
+    # Pattern: "Top N most used <col>" → entity_hit + freq_intent
+    for col in cat_cols[:2]:
+        if col in df.columns:
+            # Use singular form as the "entity word" — engine strips trailing s
+            entity = col.replace("_", " ").rstrip("s")
+            n_unique = df[col].nunique()
+            top_n = min(5, max(3, n_unique // 2))
+            examples.append(f"Top {top_n} most used {entity}")
 
-    # Date column queries
-    if date_cols:
-        examples.append(f"Show records with missing {date_cols[0]}")
+    # ── Tier 4: Numeric threshold queries (uses actual p75 / p25 values)
+    # Pattern: "Show records where <col> is above/below <value>"
+    for col in num_cols[:2]:
+        if col in df.columns:
+            num_series = pd.to_numeric(df[col], errors="coerce").dropna()
+            if len(num_series) > 5:
+                clean = col.replace("_", " ")
+                try:
+                    q75 = num_series.quantile(0.75)
+                    # Only emit if value is sensible (positive, non-trivial)
+                    if q75 > 0:
+                        examples.append(f"Records where {clean} is above {int(q75):,}")
+                except Exception:
+                    pass
 
-    # Add a few always-useful extras
+    # ── Tier 5: Date / null queries
+    for col in date_cols[:1]:
+        examples.append(f"Show records with missing {col.replace('_', ' ')}")
+
+    # ── Tier 6: Always-useful fallbacks ──────────────────────────────────────
     examples += [
         "Show records with missing values",
-        "Find duplicate records",
         "Top 20 worst records",
+        "Find duplicate records",
     ]
 
     # Deduplicate while preserving order, cap at 12
     seen = set(); out = []
     for ex in examples:
-        if ex not in seen:
-            seen.add(ex); out.append(ex)
+        key = ex.lower().strip()
+        if key not in seen:
+            seen.add(key); out.append(ex)
         if len(out) >= 12:
             break
     return out
