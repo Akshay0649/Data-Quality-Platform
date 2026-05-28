@@ -452,6 +452,76 @@ NLQ_EXAMPLES = [
 ]
 
 
+def _dynamic_examples(df: pd.DataFrame, col_mapping: dict) -> list:
+    """Generate context-aware NLQ example queries from the actual dataset columns."""
+    examples = []
+    num_cols  = col_mapping.get("numeric_columns", [])
+    cat_cols  = col_mapping.get("categorical_columns", [])
+    date_cols = col_mapping.get("date_columns", [])
+
+    # Always include these DQ-driven queries
+    examples += [
+        "Show critical records",
+        "Find anomalous records",
+        "Grade F records",
+        "Records with score below 60",
+    ]
+
+    # Numeric column queries — use actual column names
+    if num_cols:
+        col = num_cols[0]
+        try:
+            q75 = float(pd.to_numeric(df[col], errors="coerce").quantile(0.75))
+            examples.append(f"Show records where {col} is above {int(q75):,}")
+            q25 = float(pd.to_numeric(df[col], errors="coerce").quantile(0.25))
+            if q25 > 0:
+                examples.append(f"Show records where {col} is below {int(q25):,}")
+        except Exception:
+            examples.append(f"Show top 10 records by {col}")
+    if len(num_cols) >= 2:
+        col2 = num_cols[1]
+        examples.append(f"Top 5 records by {col2}")
+
+    # Categorical column queries — use actual column names + top value
+    if cat_cols:
+        col = cat_cols[0]
+        try:
+            top_val = df[col].dropna().astype(str).value_counts().index[0]
+            if top_val not in ("UNKNOWN", "N/A", "NULL", ""):
+                examples.append(f"Show records where {col} is {top_val}")
+        except Exception:
+            pass
+        examples.append(f"Which {col} has the most issues")
+    if len(cat_cols) >= 2:
+        col2 = cat_cols[1]
+        try:
+            top_val2 = df[col2].dropna().astype(str).value_counts().index[0]
+            if top_val2 not in ("UNKNOWN", "N/A", "NULL", ""):
+                examples.append(f"Top 5 {col2} by average score")
+        except Exception:
+            examples.append(f"Show top 5 {col2} with most issues")
+
+    # Date column queries
+    if date_cols:
+        examples.append(f"Show records with missing {date_cols[0]}")
+
+    # Add a few always-useful extras
+    examples += [
+        "Show records with missing values",
+        "Find duplicate records",
+        "Top 20 worst records",
+    ]
+
+    # Deduplicate while preserving order, cap at 12
+    seen = set(); out = []
+    for ex in examples:
+        if ex not in seen:
+            seen.add(ex); out.append(ex)
+        if len(out) >= 12:
+            break
+    return out
+
+
 # ── Column-type metadata ──────────────────────────────────────────────────────
 COL_TYPE_META = {
     "numeric":     {"icon": "🔢", "label": "Numeric",     "color": "#378ADD"},
@@ -713,33 +783,60 @@ def generate_demo(n: int = 300, seed: int = 42, domain: str = "finance") -> pd.D
     df = pd.DataFrame(rows)
 
     # ── Guarantee dirty data: inject known-bad rows ───────────────────────────
+    # Identify numeric columns (excluding ID/index column)
+    _num_cols = [c for c in df.columns
+                 if df[c].dtype in [float, int] and c != df.columns[0]]
+    _str_cols = [c for c in df.columns if df[c].dtype == object]
+    _date_cols = [c for c in df.columns
+                  if any(h in c.lower() for h in ("date","time","day","month","year"))]
+
     # 1. Duplicates (~7%)
     n_dupes = max(8, int(len(df) * 0.07))
     dupes   = df.sample(min(n_dupes, len(df)), random_state=seed+1).copy()
 
-    # 2. All-null rows (2% of n) — forces completeness failures
+    # 2. All-null rows (2% of n) — forces completeness = 0 → CRITICAL
     null_rows = pd.DataFrame([{c: None for c in df.columns}
-                               for _ in range(max(3, n // 50))])
+                               for _ in range(max(5, n // 40))])
 
-    # 3. Extreme-value rows — forces outlier/accuracy failures
-    extreme_rows = df.sample(min(5, len(df)), random_state=seed+2).copy()
-    num_cols = [c for c in df.columns if df[c].dtype in [float, int]
-                and c not in [df.columns[0]]]
-    for col in num_cols[:2]:
-        extreme_rows[col] = extreme_rows[col] * 999  # blow out the range
+    # 3. CRITICAL accuracy rows — large NEGATIVE values on ALL numeric cols
+    #    This triggers: _negative + _outlier flags on every num col
+    #    With N num cols: penalty = (neg_pen + out_pen) × N >> 70 → accuracy < 30 → CRITICAL
+    n_crit = max(15, n // 20)          # ~5% guaranteed CRITICAL rows
+    crit_rows = df.sample(min(n_crit, len(df)), random_state=seed+2).copy()
+    for col in _num_cols:
+        # Large negative absolute value: triggers _negative AND _outlier
+        crit_rows[col] = -999_999_999.0
 
-    # 4. Empty-string rows for text columns
-    blank_rows = df.sample(min(4, len(df)), random_state=seed+3).copy()
-    str_cols = [c for c in df.columns if df[c].dtype == object]
-    for col in str_cols[:3]:
-        blank_rows[col] = random.choice(["", "  ", "NULL", "N/A", "UNKNOWN", None])
+    # 4. Consistency-violation rows — inverted date pairs (end before start)
+    #    Forces dq_score_consistency < 40 → CRITICAL
+    n_cons = max(10, n // 30)
+    cons_rows = df.sample(min(n_cons, len(df)), random_state=seed+5).copy()
+    # Swap every pair of date columns to force ordering violations
+    if len(_date_cols) >= 2:
+        for i in range(0, len(_date_cols) - 1, 2):
+            c1, c2 = _date_cols[i], _date_cols[i + 1]
+            # Set c1 to a far-future date and c2 to a far-past date → consistency violation
+            cons_rows[c1] = "2099-12-31"
+            cons_rows[c2] = "2000-01-01"
+    elif len(_date_cols) == 1:
+        cons_rows[_date_cols[0]] = "9999-99-99"  # unparseable → validity hit
+    # Also make these rows have negative numerics → CRITICAL via accuracy too
+    for col in _num_cols:
+        cons_rows[col] = -999_999.0
 
-    # 5. Contradictory / impossible values
-    bad_rows = df.sample(min(4, len(df)), random_state=seed+4).copy()
-    for col in num_cols[:1]:
-        bad_rows[col] = -abs(bad_rows[col]) * 10  # negative where impossible
+    # 5. Empty-string / placeholder rows — forces validity failures
+    blank_rows = df.sample(min(8, len(df)), random_state=seed+3).copy()
+    for col in _str_cols[:4]:
+        blank_rows[col] = random.choice(["", "  ", "NULL", "N/A", "UNKNOWN", "???"])
+    for col in _num_cols[:2]:
+        blank_rows[col] = None   # null numeric → completeness hit
 
-    df = (pd.concat([df, dupes, null_rows, extreme_rows, blank_rows, bad_rows],
+    # 6. Mixed-type / garbage rows — format accuracy failures
+    bad_rows = df.sample(min(6, len(df)), random_state=seed+4).copy()
+    for col in _num_cols:
+        bad_rows[col] = -abs(bad_rows[col].fillna(0)) * 100  # negative, also outlier
+
+    df = (pd.concat([df, dupes, null_rows, crit_rows, cons_rows, blank_rows, bad_rows],
                     ignore_index=True)
             .sample(frac=1, random_state=seed)
             .reset_index(drop=True))
@@ -1192,7 +1289,7 @@ st.subheader("📂 Start here — upload your data")
 src_col1, src_col2 = st.columns([3, 1])
 with src_col1:
     uploaded_file = st.file_uploader(
-        "Upload any CSV — finance, HR, sales, supply chain, or anything else",
+        "Upload your data CSV",
         type=["csv"],
         help="The pipeline auto-detects column types and applies the right checks.",
     )
@@ -1228,7 +1325,7 @@ if gen_btn:
                 padding:12px 16px;margin-top:8px;font-size:13px;color:#23022E;">
       <strong>What this data contains:</strong> intentional nulls · duplicates ·
       extreme values · bad formats · blank strings — ready to stress-test the pipeline.<br>
-      <strong>Next:</strong> scroll down → click <strong>🚀 Analyse My Data</strong> →
+      <strong>Next:</strong> scroll down → click <strong>🔍 Analyse Data</strong> →
       then open the <strong>💬 Ask Your Data</strong> tab to explore results.
     </div>
     """, unsafe_allow_html=True)
@@ -1406,21 +1503,7 @@ if "input_df" in st.session_state:
     st.divider()
 
     # ─── Run Pipeline ────────────────────────────────────────────────────────
-    st.markdown("""
-    <div style="background:linear-gradient(135deg,#23022E,#3D1040);border-radius:14px;
-                padding:20px 28px;margin-bottom:16px;border:1px solid #915466;
-                text-align:center;">
-      <p style="color:#C79192;font-size:12px;font-weight:700;letter-spacing:1px;
-                text-transform:uppercase;margin:0 0 6px;">Ready to analyse?</p>
-      <p style="color:#FDFFFF;font-size:15px;font-weight:600;margin:0 0 4px;">
-        Run the full AI quality pipeline on your data
-      </p>
-      <p style="color:#C79192;font-size:12px;margin:0;">
-        Cleaning · Scoring · Anomaly Detection — all in one click
-      </p>
-    </div>
-    """, unsafe_allow_html=True)
-    if st.button("🚀 Analyse My Data — Run Full Pipeline", type="primary", use_container_width=True):
+    if st.button("🔍 Analyse Data", type="primary", use_container_width=True):
         with st.spinner("Cleaning data…"):
             cleaned_df, clean_stats = run_cleaning(input_df, col_mapping)
         with st.spinner("Scoring across 5 dimensions…"):
@@ -1433,6 +1516,7 @@ if "input_df" in st.session_state:
         n_anom = int(scored_df.get("is_anomaly", pd.Series(dtype=bool)).sum())
         st.success(f"Pipeline complete — {len(scored_df):,} records scored · {n_anom} anomalies detected.")
         st.info("💬 **Next step:** Click the **Ask Your Data** tab (second tab) to query your results in plain English.")
+    st.caption("Runs cleaning · scoring · anomaly detection across all dimensions")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2497,16 +2581,26 @@ if "scored_df" in st.session_state:
             </div>
             """, unsafe_allow_html=True)
 
-        # ── Example chips — collapsible, always below results ────────────────
-        with st.expander("💡 Example queries — click any to run instantly", expanded=not bool(active_query)):
-            st.markdown('<p style="color:#5E6472;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;margin:0 0 8px;">Try these examples</p>', unsafe_allow_html=True)
-            chip_rows = [NLQ_EXAMPLES[:4], NLQ_EXAMPLES[4:8], NLQ_EXAMPLES[8:]]
-            for row in chip_rows:
-                cols = st.columns(len(row))
-                for i, example in enumerate(row):
-                    with cols[i]:
-                        if st.button(example, key=f"chip_{example}", use_container_width=True):
-                            st.session_state["nlq_chip"] = example
+        # ── Example chips — dynamic based on actual dataset ────────────────
+        with st.expander("💡 Example queries — based on your data", expanded=not bool(active_query)):
+            # Generate context-aware examples from actual columns; fall back to generic
+            try:
+                _q_examples = _dynamic_examples(df_f, col_mapping)
+            except Exception:
+                _q_examples = NLQ_EXAMPLES
+            st.markdown(
+                '<p style="color:#5E6472;font-size:11px;font-weight:700;letter-spacing:0.8px;'
+                'text-transform:uppercase;margin:0 0 8px;">Suggestions based on your columns</p>',
+                unsafe_allow_html=True,
+            )
+            # Render in rows of 3
+            for _row_start in range(0, len(_q_examples), 3):
+                _row = _q_examples[_row_start:_row_start + 3]
+                _cols = st.columns(len(_row))
+                for _ci, _ex in enumerate(_row):
+                    with _cols[_ci]:
+                        if st.button(_ex, key=f"chip_{_row_start}_{_ci}", use_container_width=True):
+                            st.session_state["nlq_chip"] = _ex
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
