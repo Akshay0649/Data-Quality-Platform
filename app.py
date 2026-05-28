@@ -1935,44 +1935,26 @@ if "scored_df" in st.session_state:
         """, unsafe_allow_html=True)
 
         # ── State init ───────────────────────────────────────────────────────
-        # nlq_chip holds the last chip-click value (never conflicts with widget key)
         if "nlq_chip" not in st.session_state:
             st.session_state["nlq_chip"] = ""
 
-        # ── Example chips (rendered BEFORE the text input) ────────────────────
-        st.markdown('<p style="color:#5E6472;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;margin:0 0 8px;">Try these examples</p>', unsafe_allow_html=True)
-        chip_rows = [NLQ_EXAMPLES[:4], NLQ_EXAMPLES[4:8], NLQ_EXAMPLES[8:]]
-        for row in chip_rows:
-            cols = st.columns(len(row))
-            for i, example in enumerate(row):
-                with cols[i]:
-                    if st.button(example, key=f"chip_{example}", use_container_width=True):
-                        # Write to separate key — never the widget's own key
-                        st.session_state["nlq_chip"] = example
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # ── Search input ─────────────────────────────────────────────────────
-        # Populate from chip click if present, else keep blank
+        # ── Search bar FIRST — results appear immediately below ───────────────
         prefill = st.session_state.get("nlq_chip", "")
         nlq_col1, nlq_col2 = st.columns([6, 1])
         with nlq_col1:
             nlq_input = st.text_input(
                 "Your question",
                 value=prefill,
-                placeholder='e.g. "Show all critical records" · "Which vendors have the most issues?" · "Top 20 worst records"',
+                placeholder='e.g. "Show critical records" · "Which vendors have issues?" · "Top 20 worst records"',
                 label_visibility="collapsed",
                 key="nlq_typed",
             )
-            # If user typed something new, clear the chip state so it doesn't override
             if nlq_input != prefill:
                 st.session_state["nlq_chip"] = nlq_input
         with nlq_col2:
             nlq_run = st.button("🔍 Search", key="nlq_run", use_container_width=True, type="primary")
 
-        st.divider()
-
-        # ── Execute query ────────────────────────────────────────────────────
+        # ── Execute query — RIGHT under search bar ────────────────────────────
         active_query = nlq_input.strip() if nlq_input else ""
 
         if active_query:
@@ -2032,27 +2014,76 @@ if "scored_df" in st.session_state:
                         },
                     )
 
-                # ── Record filter view ────────────────────────────────────────
+                # ── Record Explorer View ─────────────────────────────────────
                 else:
                     res_df = df_f[result["mask"]].copy()
                     if result["sort_col"] and result["sort_col"] in res_df.columns:
                         res_df = res_df.sort_values(result["sort_col"], ascending=result["sort_asc"])
                     if result["limit"]:
                         res_df = res_df.head(result["limit"])
+                    res_df = res_df.reset_index(drop=True)
 
                     # ── KPI strip ─────────────────────────────────────────────
-                    k1, k2, k3, k4 = st.columns(4)
-                    avg_q = res_df["dq_score"].mean() if len(res_df) else 0
+                    avg_q  = res_df["dq_score"].mean() if "dq_score" in res_df.columns and len(res_df) else 0
                     crit_n = int((res_df["dq_severity"] == "CRITICAL").sum()) if "dq_severity" in res_df.columns else 0
                     anom_n = int(res_df["is_anomaly"].sum()) if "is_anomaly" in res_df.columns else 0
-                    k1.metric("Records Found", f"{len(res_df):,}")
-                    k2.metric("Avg Quality Score", f"{avg_q:.1f}")
-                    k3.metric("Critical Issues", f"{crit_n:,}")
-                    k4.metric("Anomalies", f"{anom_n:,}")
+                    pct    = round(100 * len(res_df) / len(df_f), 1) if len(df_f) else 0
+                    k1, k2, k3, k4 = st.columns(4)
+                    k1.metric("Records Found",    f"{len(res_df):,}",  f"{pct}% of total")
+                    k2.metric("Avg Quality Score", f"{avg_q:.1f}",     delta_color="normal")
+                    k3.metric("Critical Issues",  f"{crit_n:,}")
+                    k4.metric("Anomalies Flagged",f"{anom_n:,}")
 
-                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.divider()
 
-                    # ── Smart column selection ────────────────────────────────
+                    # ── Mini insight charts ───────────────────────────────────
+                    ch1, ch2 = st.columns(2)
+
+                    with ch1:
+                        st.markdown("**Severity breakdown in results**")
+                        if "dq_severity" in res_df.columns:
+                            sev_counts = res_df["dq_severity"].value_counts().reindex(SEV_ORDER, fill_value=0)
+                            fig_sev_r = px.bar(
+                                x=sev_counts.index,
+                                y=sev_counts.values,
+                                color=sev_counts.index,
+                                color_discrete_map=SEV_COLORS,
+                                labels={"x": "", "y": "Records"},
+                                text=sev_counts.values,
+                            )
+                            fig_sev_r.update_traces(textposition="outside", showlegend=False)
+                            fig_sev_r.update_layout(
+                                **_chart_layout(height=240),
+                                xaxis=dict(**_GRID_X, title=""),
+                                yaxis=dict(**_GRID_Y, title="Records"),
+                                bargap=0.3, showlegend=False,
+                            )
+                            st.plotly_chart(fig_sev_r, use_container_width=True)
+                        else:
+                            st.info("No severity data.")
+
+                    with ch2:
+                        st.markdown("**Quality score distribution in results**")
+                        if "dq_score" in res_df.columns:
+                            fig_sc_r = px.histogram(
+                                res_df, x="dq_score", nbins=20,
+                                color_discrete_sequence=["#915466"],
+                                labels={"dq_score": "Quality Score"},
+                            )
+                            fig_sc_r.update_traces(marker_line_width=0)
+                            fig_sc_r.update_layout(
+                                **_chart_layout(height=240),
+                                xaxis=dict(**_GRID_X, title="Quality Score (0–100)"),
+                                yaxis=dict(**_GRID_Y, title="Records"),
+                                bargap=0.05,
+                            )
+                            st.plotly_chart(fig_sc_r, use_container_width=True)
+                        else:
+                            st.info("No score data.")
+
+                    st.divider()
+
+                    # ── Column picker ─────────────────────────────────────────
                     priority_cols = (
                         col_mapping.get("id_columns", [])[:2] +
                         col_mapping.get("date_columns", [])[:1] +
@@ -2061,10 +2092,41 @@ if "scored_df" in st.session_state:
                     )
                     score_cols = ["dq_score", "dq_severity", "dq_grade"]
                     anom_cols  = [c for c in ["isolation_score", "is_anomaly"] if c in res_df.columns]
-                    show_cols  = [c for c in (priority_cols + score_cols + anom_cols) if c in res_df.columns]
-                    if not show_cols:
-                        show_cols = list(res_df.columns[:12])
+                    default_cols = [c for c in (priority_cols + score_cols + anom_cols) if c in res_df.columns]
+                    if not default_cols:
+                        default_cols = list(res_df.columns[:10])
 
+                    with st.expander("🎛️ Choose columns to display", expanded=False):
+                        chosen_cols = st.multiselect(
+                            "Columns",
+                            options=list(res_df.columns),
+                            default=default_cols,
+                            label_visibility="collapsed",
+                            key="nlq_col_picker",
+                        )
+                    show_cols = chosen_cols if chosen_cols else default_cols
+
+                    # ── Sort control ──────────────────────────────────────────
+                    sort_c1, sort_c2, sort_c3 = st.columns([3, 2, 1])
+                    with sort_c1:
+                        sort_by = st.selectbox(
+                            "Sort by", options=show_cols,
+                            index=show_cols.index("dq_score") if "dq_score" in show_cols else 0,
+                            key="nlq_sort_col", label_visibility="visible"
+                        )
+                    with sort_c2:
+                        sort_dir = st.radio("Order", ["⬆ Ascending","⬇ Descending"],
+                                            index=1, horizontal=True,
+                                            key="nlq_sort_dir", label_visibility="visible")
+                    with sort_c3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        st.caption(f"{len(res_df):,} rows")
+
+                    sort_asc_ui = sort_dir == "⬆ Ascending"
+                    if sort_by in res_df.columns:
+                        res_df = res_df.sort_values(sort_by, ascending=sort_asc_ui)
+
+                    # ── Main data table ───────────────────────────────────────
                     col_cfg = {}
                     if "dq_score" in show_cols:
                         col_cfg["dq_score"] = st.column_config.ProgressColumn(
@@ -2072,39 +2134,100 @@ if "scored_df" in st.session_state:
                     if "isolation_score" in show_cols:
                         col_cfg["isolation_score"] = st.column_config.ProgressColumn(
                             "AI Risk Score", min_value=0, max_value=100, format="%d")
+                    if "dq_score_completeness" in show_cols:
+                        col_cfg["dq_score_completeness"] = st.column_config.ProgressColumn(
+                            "Missing Data", min_value=0, max_value=100, format="%d")
+                    if "dq_score_validity" in show_cols:
+                        col_cfg["dq_score_validity"] = st.column_config.ProgressColumn(
+                            "Format Accuracy", min_value=0, max_value=100, format="%d")
 
                     st.dataframe(
                         res_df[show_cols].reset_index(drop=True),
                         use_container_width=True,
-                        height=460,
+                        height=400,
                         column_config=col_cfg,
                     )
+
+                    # ── Row drill-down ────────────────────────────────────────
+                    st.divider()
+                    with st.expander("🔍 Drill into a specific record", expanded=False):
+                        if len(res_df) > 0:
+                            row_idx = st.number_input(
+                                "Row number (0-based)",
+                                min_value=0,
+                                max_value=max(0, len(res_df) - 1),
+                                value=0,
+                                step=1,
+                                key="nlq_row_drill",
+                            )
+                            row = res_df.iloc[int(row_idx)]
+                            # Split into data cols and DQ cols
+                            dq_keys   = [c for c in row.index if c.startswith("dq_") or c in ("is_anomaly","isolation_score","iqr_outlier_count")]
+                            data_keys = [c for c in row.index if c not in dq_keys]
+
+                            drill_c1, drill_c2 = st.columns(2)
+                            with drill_c1:
+                                st.markdown("**📄 Record data**")
+                                for col_name in data_keys:
+                                    val = row[col_name]
+                                    display = "_(empty)_" if (val is None or (isinstance(val, float) and np.isnan(val))) else str(val)
+                                    st.markdown(f"**{col_name}:** {display}")
+                            with drill_c2:
+                                st.markdown("**🎯 Quality scores**")
+                                for col_name in dq_keys:
+                                    val = row[col_name]
+                                    if isinstance(val, float) and not np.isnan(val) and "score" in col_name:
+                                        color = "#1D9E75" if val >= 80 else "#EF9F27" if val >= 60 else "#E24B4A"
+                                        label = col_name.replace("dq_score_","").replace("dq_","").replace("_"," ").title()
+                                        st.markdown(
+                                            f'<div style="display:flex;justify-content:space-between;'
+                                            f'padding:5px 10px;border-radius:8px;background:#F5EEF0;margin:3px 0;">'
+                                            f'<span style="color:#23022E;font-size:13px;">{label}</span>'
+                                            f'<span style="color:{color};font-weight:800;font-size:13px;">{val:.1f}</span>'
+                                            f'</div>',
+                                            unsafe_allow_html=True
+                                        )
+                                    else:
+                                        display = str(val) if val is not None else "—"
+                                        st.markdown(f"**{col_name}:** {display}")
+                        else:
+                            st.info("No records to drill into.")
 
                     # ── Download ──────────────────────────────────────────────
                     dl1, dl2 = st.columns([3, 1])
                     with dl1:
                         st.download_button(
                             label=f"⬇️ Download these {len(res_df):,} records as CSV",
-                            data=res_df.to_csv(index=False).encode("utf-8"),
+                            data=res_df[show_cols].to_csv(index=False).encode("utf-8"),
                             file_name=f"nlq_results_{len(res_df)}rows.csv",
                             mime="text/csv",
                             use_container_width=True,
                         )
                     with dl2:
-                        st.caption(f"{len(res_df):,} of {len(df_f):,} total records")
+                        st.caption(f"{len(res_df):,} of {len(df_f):,} total")
 
         else:
             # ── Empty state ───────────────────────────────────────────────────
             st.markdown("""
-            <div style="text-align:center;padding:48px 24px;color:#5E6472;">
-              <p style="font-size:48px;margin:0 0 12px;">💬</p>
-              <p style="font-size:16px;font-weight:700;color:#23022E;margin:0 0 8px;">Ask anything about your data</p>
-              <p style="font-size:13px;margin:0;line-height:1.7;">
-                Type a question above or click an example chip to get started.<br>
-                No SQL. No filters. Just plain English.
+            <div style="text-align:center;padding:32px 24px 16px;color:#5E6472;">
+              <p style="font-size:40px;margin:0 0 10px;">💬</p>
+              <p style="font-size:15px;font-weight:700;color:#23022E;margin:0 0 6px;">Ask anything about your data</p>
+              <p style="font-size:12px;margin:0;line-height:1.7;">
+                Type a question above or pick an example below.
               </p>
             </div>
             """, unsafe_allow_html=True)
+
+        # ── Example chips — collapsible, always below results ────────────────
+        with st.expander("💡 Example queries — click any to run instantly", expanded=not bool(active_query)):
+            st.markdown('<p style="color:#5E6472;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;margin:0 0 8px;">Try these examples</p>', unsafe_allow_html=True)
+            chip_rows = [NLQ_EXAMPLES[:4], NLQ_EXAMPLES[4:8], NLQ_EXAMPLES[8:]]
+            for row in chip_rows:
+                cols = st.columns(len(row))
+                for i, example in enumerate(row):
+                    with cols[i]:
+                        if st.button(example, key=f"chip_{example}", use_container_width=True):
+                            st.session_state["nlq_chip"] = example
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
