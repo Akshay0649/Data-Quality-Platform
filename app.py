@@ -1,5 +1,5 @@
 """
-app.py — DataQual AI  v2.4
+app.py — DataQual AI  v2.7
 =============================================
 Universal AI-powered DQ platform.
 Works with ANY dataset — no domain selection needed.
@@ -31,7 +31,7 @@ from sklearn.ensemble import IsolationForest
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="DataQual AI — v2.4",
+    page_title="DataQual AI — v2.7",
     page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -127,7 +127,7 @@ def section_head(title, subtitle=""):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NATURAL LANGUAGE QUERY ENGINE  (v2.4)
+# NATURAL LANGUAGE QUERY ENGINE  (v2.4 → v2.7)
 # ═══════════════════════════════════════════════════════════════════════════════
 import re as _re
 
@@ -169,6 +169,143 @@ def _parse_number(tokens: list[str]) -> float | None:
         except ValueError: pass
     return None
 
+
+# ═══ Multi-condition AND/OR helpers (v2.7) ═══════════════════════════════════
+_CMP_OPS = {
+    ">":">", ">=":">=", "<":"<", "<=":"<=", "=":"==", "==":"==",
+    "above":">", "over":">", "greater than":">", "higher than":">",
+    "more than":">", "bigger than":">", "exceeds":">", "exceed":">",
+    "below":"<", "under":"<", "less than":"<", "lower than":"<", "smaller than":"<",
+}
+_CMP_ALT = "|".join(sorted((_re.escape(k) for k in _CMP_OPS), key=len, reverse=True))
+_NLQ_MONTHS = {"january":1,"february":2,"march":3,"april":4,"may":5,"june":6,
+               "july":7,"august":8,"september":9,"october":10,"november":11,
+               "december":12,"jan":1,"feb":2,"mar":3,"apr":4,"jun":6,"jul":7,
+               "aug":8,"sep":9,"sept":9,"oct":10,"nov":11,"dec":12}
+
+def _apply_op(s, op, v):
+    import numpy as np
+    if op == ">":  return s.fillna(-np.inf) >  v
+    if op == ">=": return s.fillna(-np.inf) >= v
+    if op == "<":  return s.fillna(np.inf)  <  v
+    if op == "<=": return s.fillna(np.inf)  <= v
+    return s == v
+
+def _match_col(hint, cols, df):
+    hint = (hint or "").strip().strip("_").lower()
+    if not hint: return None
+    cand = [c for c in cols if c in df.columns]
+    return next((c for c in cand
+                 if hint == c.lower() or hint in c.lower() or c.lower() in hint
+                 or hint.replace("_"," ") in c.lower().replace("_"," ")), None)
+
+def _date_atom(c, df, date_cols):
+    import pandas as pd
+    if not date_cols: return None, None
+    dcol = next((x for x in date_cols if x.lower() in c or x.split("_")[0].lower() in c),
+                date_cols[0])
+    ds = pd.to_datetime(df[dcol], errors="coerce")
+    btw = _re.search(r'between\s+(\d{4}-\d{1,2}-\d{1,2})\s+and\s+(\d{4}-\d{1,2}-\d{1,2})', c)
+    aft = _re.search(r'(?:after|since|from|starting)\s+(\d{4}-\d{1,2}-\d{1,2})', c)
+    bef = _re.search(r'(?:before|until|till|up to|by)\s+(\d{4}-\d{1,2}-\d{1,2})', c)
+    my  = _re.search(r'\b([a-z]+)\s+(\d{4})\b', c)
+    yr  = _re.search(r'\b(?:in|during|for|year)\s+(\d{4})\b', c)
+    if btw:
+        d1 = pd.to_datetime(btw.group(1), errors="coerce")
+        d2 = pd.to_datetime(btw.group(2), errors="coerce")
+        if pd.notna(d1) and pd.notna(d2):
+            lo, hi = min(d1, d2), max(d1, d2)
+            return ds.between(lo, hi), f"{dcol} between {lo.date()} and {hi.date()}"
+    if aft:
+        d1 = pd.to_datetime(aft.group(1), errors="coerce")
+        if pd.notna(d1): return ds >= d1, f"{dcol} on/after {d1.date()}"
+    if bef:
+        d2 = pd.to_datetime(bef.group(1), errors="coerce")
+        if pd.notna(d2): return ds <= d2, f"{dcol} on/before {d2.date()}"
+    if my and my.group(1) in _NLQ_MONTHS:
+        mo = _NLQ_MONTHS[my.group(1)]; yy = int(my.group(2))
+        return (ds.dt.year == yy) & (ds.dt.month == mo), f"{dcol} in {my.group(1).title()} {yy}"
+    if yr:
+        yy = int(yr.group(1))
+        return ds.dt.year == yy, f"{dcol} in {yy}"
+    return None, None
+
+def _nlq_atom(clause, df, col_mapping):
+    """Parse ONE clause -> (bool Series, label) or None.
+    A clause may hold several predicates (e.g. "critical records after 2023-06-01");
+    ALL of them are AND-combined so nothing in the clause is silently dropped."""
+    import pandas as pd
+    c = clause.replace("§§", "and").strip()
+    num_cols  = col_mapping.get("numeric_columns", [])
+    cat_cols  = col_mapping.get("categorical_columns", [])
+    date_cols = [x for x in col_mapping.get("date_columns", []) if x in df.columns]
+
+    m = pd.Series([True] * len(df), index=df.index)
+    labels = []
+    hit = False
+
+    sev = [_SEV_MAP[t] for t in _tokens(c) if t in _SEV_MAP]
+    if sev and "dq_severity" in df.columns:
+        m &= df["dq_severity"].isin(sev); labels.append(f"severity = {' or '.join(sorted(set(sev)))}"); hit = True
+    gm = _re.search(r'\bgrade\s+([a-f])\b', c)
+    if gm and "dq_grade" in df.columns:
+        g = gm.group(1).upper(); m &= df["dq_grade"] == g; labels.append(f"grade = {g}"); hit = True
+    sm = _re.search(r'score\s*(' + _CMP_ALT + r')\s*([\d\.]+)', c)
+    if sm and "dq_score" in df.columns:
+        op = _CMP_OPS[sm.group(1).strip()]; v = float(sm.group(2))
+        m &= _apply_op(df["dq_score"], op, v); labels.append(f"DQ score {op} {v:.0f}"); hit = True
+    dmask, dlabel = _date_atom(c, df, date_cols)
+    if dmask is not None:
+        m &= dmask; labels.append(dlabel); hit = True
+    nm = _re.search(r'([\w ]+?)\s*(' + _CMP_ALT + r')\s*([\d,\.]+)', c)
+    if nm:
+        col = _match_col(nm.group(1), num_cols, df)
+        if col and pd.api.types.is_numeric_dtype(df[col]):
+            op = _CMP_OPS[nm.group(2).strip()]; v = float(nm.group(3).replace(",", ""))
+            m &= _apply_op(df[col], op, v); labels.append(f"{col} {op} {v:,.0f}"); hit = True
+    if any(w in c for w in ("anomal","outlier","flagged","suspicious","unusual")) and "is_anomaly" in df.columns:
+        m &= df["is_anomaly"] == True; labels.append("anomalous"); hit = True
+    if any(w in c for w in ("missing","null","empty","blank","incomplete")):
+        m &= df.isnull().any(axis=1); labels.append("has missing values"); hit = True
+    cm2 = _re.search(r'([\w ]+?)\s*(?:==|=|is|equals|contains)\s*["\']?([\w][\w \-]*?)["\']?$', c)
+    if cm2 and not sm:  # avoid colliding with "score = 50" style
+        col = _match_col(cm2.group(1), cat_cols, df)
+        if col:
+            val = cm2.group(2).strip().lower()
+            ch = df[col].astype(str).str.lower().str.contains(_re.escape(val), na=False)
+            if ch.any():
+                m &= ch; labels.append(f"{col} contains '{val}'"); hit = True
+
+    if not hit:
+        return None
+    return m, " + ".join(labels)
+
+def _multi_condition(q, df, col_mapping):
+    """Split on AND/OR connectors, parse each atom, combine left-to-right.
+    Returns {mask,label,used_or,n} or None when fewer than 2 atoms parse."""
+    qp = _re.sub(r'(\bbetween\b\s+\S+)\s+and\s+', r'\1 §§ ', q)
+    parts = _re.split(r'\s+(and|or)\s+', qp)
+    if len(parts) < 3:
+        return None
+    seq = [(None, parts[0])] + [(parts[i], parts[i + 1]) for i in range(1, len(parts), 2)]
+    parsed = [(conn, _nlq_atom(clause, df, col_mapping)) for conn, clause in seq]
+    good = [a for _, a in parsed if a is not None]
+    if len(good) < 2:
+        return None
+    mask = None; labels = []; used_or = False
+    for conn, a in parsed:
+        if a is None:
+            continue
+        m, l = a
+        if mask is None:
+            mask = m.copy(); labels.append(l)
+        elif conn == "or":
+            mask = mask | m; labels.append(f"OR {l}"); used_or = True
+        else:
+            mask = mask & m; labels.append(f"AND {l}")
+    return {"mask": mask, "label": " · ".join(labels), "used_or": used_or, "n": len(good)}
+
+
 def parse_nlq(query: str, df: "pd.DataFrame", col_mapping: dict) -> dict:
     """
     Parse a natural-language query and return:
@@ -192,119 +329,199 @@ def parse_nlq(query: str, df: "pd.DataFrame", col_mapping: dict) -> dict:
     cat_cols = col_mapping.get("categorical_columns", [])
     id_cols  = col_mapping.get("id_columns", [])
 
-    # ── 1. Severity filter ────────────────────────────────────────────────────
-    sev_hits = [_SEV_MAP[t] for t in toks if t in _SEV_MAP]
-    if sev_hits and "dq_severity" in df.columns:
-        mask &= df["dq_severity"].isin(sev_hits)
-        summary_parts.append(f"severity = {' or '.join(sev_hits)}")
+    # ── 0. Multi-condition AND/OR pre-pass  (v2.7) ────────────────────────────
+    num_m = None
+    matched_col = None
+    _mc = _multi_condition(q, df, col_mapping)
+    _skip_predicate_blocks = _mc is not None
+    if _mc is not None:
+        mask &= _mc["mask"]
+        summary_parts.append(_mc["label"])
 
-    # ── 2. Grade filter ───────────────────────────────────────────────────────
-    grade_m = _re.search(r'\bgrade\s+([a-fA-F])\b', q)
-    if grade_m and "dq_grade" in df.columns:
-        g = grade_m.group(1).upper()
-        mask &= df["dq_grade"] == g
-        summary_parts.append(f"grade = {g}")
+    if not _skip_predicate_blocks:
+        # ── 1. Severity filter ────────────────────────────────────────────────────
+        sev_hits = [_SEV_MAP[t] for t in toks if t in _SEV_MAP]
+        if sev_hits and "dq_severity" in df.columns:
+            mask &= df["dq_severity"].isin(sev_hits)
+            summary_parts.append(f"severity = {' or '.join(sev_hits)}")
 
-    # ── 3. DQ score threshold ─────────────────────────────────────────────────
-    score_m = _re.search(r'score\s*(below|under|less than|<|above|over|greater than|>|between)\s*([\d\.]+)(?:\s*and\s*([\d\.]+))?', q)
-    if score_m and "dq_score" in df.columns:
-        op, v1, v2 = score_m.group(1), float(score_m.group(2)), score_m.group(3)
-        if op in ("below","under","less than","<"):
-            mask &= df["dq_score"] < v1
-            summary_parts.append(f"DQ score < {v1:.0f}")
-        elif op in ("above","over","greater than",">"):
-            mask &= df["dq_score"] > v1
-            summary_parts.append(f"DQ score > {v1:.0f}")
-        elif op == "between" and v2:
-            mask &= df["dq_score"].between(v1, float(v2))
-            summary_parts.append(f"DQ score between {v1:.0f}–{float(v2):.0f}")
+        # ── 2. Grade filter ───────────────────────────────────────────────────────
+        grade_m = _re.search(r'\bgrade\s+([a-fA-F])\b', q)
+        if grade_m and "dq_grade" in df.columns:
+            g = grade_m.group(1).upper()
+            mask &= df["dq_grade"] == g
+            summary_parts.append(f"grade = {g}")
 
-    # ── 4. Anomaly / unusual filter ───────────────────────────────────────────
-    anom_words = {"unusual","anomal","anomaly","anomalous","outlier","outliers","flagged","suspicious","weird","strange","risky","risk"}
-    if any(w in q for w in anom_words):
-        if "is_anomaly" in df.columns:
-            mask &= df["is_anomaly"] == True
-            summary_parts.append("flagged as anomalous by AI")
-        elif "isolation_score" in df.columns:
-            mask &= df["isolation_score"] >= 70
-            summary_parts.append("AI risk score ≥ 70")
+        # ── 3. DQ score threshold ─────────────────────────────────────────────────
+        score_m = _re.search(r'score\s*(below|under|less than|<|above|over|greater than|>|between)\s*([\d\.]+)(?:\s*and\s*([\d\.]+))?', q)
+        if score_m and "dq_score" in df.columns:
+            op, v1, v2 = score_m.group(1), float(score_m.group(2)), score_m.group(3)
+            if op in ("below","under","less than","<"):
+                mask &= df["dq_score"] < v1
+                summary_parts.append(f"DQ score < {v1:.0f}")
+            elif op in ("above","over","greater than",">"):
+                mask &= df["dq_score"] > v1
+                summary_parts.append(f"DQ score > {v1:.0f}")
+            elif op == "between" and v2:
+                mask &= df["dq_score"].between(v1, float(v2))
+                summary_parts.append(f"DQ score between {v1:.0f}–{float(v2):.0f}")
 
-    # ── 5. Duplicate records ──────────────────────────────────────────────────
-    dup_words = {"duplicate","duplicates","duplicated","dup","dups","repeated"}
-    if any(w in q for w in dup_words):
-        dup_col = next((c for c in id_cols if c in df.columns), None)
-        if dup_col:
-            dupes = df[dup_col].duplicated(keep=False)
-            mask &= dupes
-            summary_parts.append(f"duplicate {dup_col}")
-        elif "dq_score_uniqueness" in df.columns:
-            mask &= df["dq_score_uniqueness"] < 50
-            summary_parts.append("uniqueness score < 50")
+        # ── 4. Anomaly / unusual filter ───────────────────────────────────────────
+        anom_words = {"unusual","anomal","anomaly","anomalous","outlier","outliers","flagged","suspicious","weird","strange","risky","risk"}
+        if any(w in q for w in anom_words):
+            if "is_anomaly" in df.columns:
+                mask &= df["is_anomaly"] == True
+                summary_parts.append("flagged as anomalous by AI")
+            elif "isolation_score" in df.columns:
+                mask &= df["isolation_score"] >= 70
+                summary_parts.append("AI risk score ≥ 70")
 
-    # ── 6. Missing / null values ──────────────────────────────────────────────
-    miss_words = {"missing","null","nulls","empty","blank","nan","incomplete"}
-    if any(w in q for w in miss_words) and not any(w in q for w in ("completeness","score")):
-        null_mask = df.isnull().any(axis=1)
-        mask &= null_mask
-        summary_parts.append("has missing values")
+        # ── 5. Duplicate records ──────────────────────────────────────────────────
+        dup_words = {"duplicate","duplicates","duplicated","dup","dups","repeated"}
+        if any(w in q for w in dup_words):
+            dup_col = next((c for c in id_cols if c in df.columns), None)
+            if dup_col:
+                dupes = df[dup_col].duplicated(keep=False)
+                mask &= dupes
+                summary_parts.append(f"duplicate {dup_col}")
+            elif "dq_score_uniqueness" in df.columns:
+                mask &= df["dq_score_uniqueness"] < 50
+                summary_parts.append("uniqueness score < 50")
 
-    # ── 7. Dimension weakness filter ─────────────────────────────────────────
-    dim_hits = [(k, _DIM_MAP[k]) for k in _DIM_MAP if k in q]
-    if dim_hits:
-        thresh_m = _re.search(r'(below|under|<|less than)\s*([\d\.]+)', q)
-        thresh = float(thresh_m.group(2)) if thresh_m else 70.0
-        for kw, col in dim_hits:
-            if col in df.columns:
-                mask &= df[col] < thresh
-                summary_parts.append(f"{_DIM_HUMAN[col]} score < {thresh:.0f}")
+        # ── 6. Missing / null values ──────────────────────────────────────────────
+        miss_words = {"missing","null","nulls","empty","blank","nan","incomplete"}
+        if any(w in q for w in miss_words) and not any(w in q for w in ("completeness","score")):
+            null_mask = df.isnull().any(axis=1)
+            mask &= null_mask
+            summary_parts.append("has missing values")
 
-    # ── 8. Numeric column value filter  (amount > 50000, price < 100) ─────────
-    # Expanded regex: captures "higher than", "more than", "lower than" etc.
-    num_m = _re.search(
-        r'([\w_]+(?:\s+[\w_]+)?)\s*(>=|<=|>|<|=|==|above|below|over|under|'
-        r'higher than|lower than|more than|less than|greater than|'
-        r'bigger than|smaller than|exceeds|exceed)\s*([\d,\.]+)', q)
-    if num_m:
-        col_hint    = num_m.group(1).strip().replace(" ","_")
-        op_str      = num_m.group(2).strip()
-        val         = float(num_m.group(3).replace(",",""))
-        matched_col = next(
-            (c for c in df.columns if col_hint in c.lower() or c.lower() in col_hint), None)
-        if matched_col and pd.api.types.is_numeric_dtype(df[matched_col]):
-            op_map = {
-                ">":">",">=":">=","<":"<","<=":"<=","=":"==","==":"==",
-                "above":">","over":">","greater than":">",
-                "higher than":">","more than":">","bigger than":">","exceeds":">","exceed":">",
-                "below":"<","under":"<","less than":"<",
-                "lower than":"<","smaller than":"<",
-            }
-            op = op_map.get(op_str, ">")
-            if op == ">":    mask &= df[matched_col].fillna(-np.inf) > val
-            elif op == ">=": mask &= df[matched_col].fillna(-np.inf) >= val
-            elif op == "<":  mask &= df[matched_col].fillna(np.inf)  < val
-            elif op == "<=": mask &= df[matched_col].fillna(np.inf)  <= val
-            elif op == "==": mask &= df[matched_col] == val
-            summary_parts.append(f"{matched_col} {op} {val:,.0f}")
+        # ── 7. Dimension weakness filter ─────────────────────────────────────────
+        dim_hits = [(k, _DIM_MAP[k]) for k in _DIM_MAP if k in q]
+        if dim_hits:
+            thresh_m = _re.search(r'(below|under|<|less than)\s*([\d\.]+)', q)
+            thresh = float(thresh_m.group(2)) if thresh_m else 70.0
+            for kw, col in dim_hits:
+                if col in df.columns:
+                    mask &= df[col] < thresh
+                    summary_parts.append(f"{_DIM_HUMAN[col]} score < {thresh:.0f}")
 
-    # ── 9. Categorical value filter  (vendor = 'Accenture', status = paid) ───
-    cat_m = _re.search(r'([\w_]+)\s*(?:=|is|equals|called|named)\s*["\']?([\w\s]+)["\']?', q)
-    if cat_m:
-        col_hint = cat_m.group(1).replace(" ","_")
-        val_hint = cat_m.group(2).strip()
-        matched_col = next(
-            (c for c in df.columns if col_hint in c.lower() or c.lower() in col_hint), None)
-        if matched_col and matched_col not in ("dq_severity","dq_grade","is_anomaly"):
-            col_vals = df[matched_col].astype(str).str.lower()
-            hit = col_vals.str.contains(val_hint, na=False)
-            if hit.sum() > 0:
-                mask &= hit
-                summary_parts.append(f"{matched_col} contains '{val_hint}'")
+        # ── 8. Numeric column value filter  (amount > 50000, price < 100) ─────────
+        # Expanded regex: captures "higher than", "more than", "lower than" etc.
+        num_m = _re.search(
+            r'([\w_]+(?:\s+[\w_]+){0,3})\s*(?:is\s+|are\s+|was\s+)?(>=|<=|>|<|=|==|above|below|over|under|'
+            r'higher than|lower than|more than|less than|greater than|'
+            r'bigger than|smaller than|exceeds|exceed)\s*([\d,\.]+)', q)
+        if num_m:
+            # Strip any leading stopwords the greedy regex may have consumed
+            # e.g. "where session duration sec" → "session_duration_sec"
+            _raw_hint = num_m.group(1).strip().split()
+            while _raw_hint and _raw_hint[0].lower() in _STOPWORDS:
+                _raw_hint.pop(0)
+            col_hint = "_".join(_raw_hint)
+            op_str      = num_m.group(2).strip()
+            val         = float(num_m.group(3).replace(",",""))
+            # Match col_hint against actual column names — try substring both ways
+            matched_col = next(
+                (c for c in df.columns
+                 if col_hint and (col_hint in c.lower() or c.lower() in col_hint
+                                  or col_hint.replace("_"," ") in c.lower().replace("_"," "))),
+                None)
+            if matched_col and pd.api.types.is_numeric_dtype(df[matched_col]):
+                op_map = {
+                    ">":">",">=":">=","<":"<","<=":"<=","=":"==","==":"==",
+                    "above":">","over":">","greater than":">",
+                    "higher than":">","more than":">","bigger than":">","exceeds":">","exceed":">",
+                    "below":"<","under":"<","less than":"<",
+                    "lower than":"<","smaller than":"<",
+                }
+                op = op_map.get(op_str, ">")
+                if op == ">":    mask &= df[matched_col].fillna(-np.inf) > val
+                elif op == ">=": mask &= df[matched_col].fillna(-np.inf) >= val
+                elif op == "<":  mask &= df[matched_col].fillna(np.inf)  < val
+                elif op == "<=": mask &= df[matched_col].fillna(np.inf)  <= val
+                elif op == "==": mask &= df[matched_col] == val
+                summary_parts.append(f"{matched_col} {op} {val:,.0f}")
+
+        # ── 9. Categorical value filter  (vendor = 'Accenture', status = paid) ───
+        cat_m = _re.search(r'([\w_]+)\s*(?:=|is|equals|called|named)\s*["\']?([\w\s]+)["\']?', q)
+        if cat_m:
+            col_hint = cat_m.group(1).replace(" ","_")
+            val_hint = cat_m.group(2).strip()
+            matched_col = next(
+                (c for c in df.columns if col_hint in c.lower() or c.lower() in col_hint), None)
+            if matched_col and matched_col not in ("dq_severity","dq_grade","is_anomaly"):
+                col_vals = df[matched_col].astype(str).str.lower()
+                hit = col_vals.str.contains(val_hint, na=False)
+                if hit.sum() > 0:
+                    mask &= hit
+                    summary_parts.append(f"{matched_col} contains '{val_hint}'")
+
+        # ── 9b. Date-range filter  (v2.6) ─────────────────────────────────────────
+        # Supports: "after 2023-06-01", "before 2024-01-01", "since 2023-01-01",
+        #           "between 2023-01-01 and 2023-12-31", "in January 2024", "in 2024".
+        # Date columns are stored as "%Y-%m-%d" strings post-cleaning → re-parse here.
+        _present_date_cols = [c for c in col_mapping.get("date_columns", []) if c in df.columns]
+        if _present_date_cols:
+            _dcol = next((c for c in _present_date_cols
+                          if c.lower() in q or c.split("_")[0].lower() in q),
+                         _present_date_cols[0])
+            _dser = pd.to_datetime(df[_dcol], errors="coerce")
+            _MONTHS = {"january":1,"february":2,"march":3,"april":4,"may":5,"june":6,
+                       "july":7,"august":8,"september":9,"october":10,"november":11,
+                       "december":12,"jan":1,"feb":2,"mar":3,"apr":4,"jun":6,"jul":7,
+                       "aug":8,"sep":9,"sept":9,"oct":10,"nov":11,"dec":12}
+            _date_applied = False
+
+            _btw = _re.search(r'between\s+(\d{4}-\d{1,2}-\d{1,2})\s+and\s+(\d{4}-\d{1,2}-\d{1,2})', q)
+            _aft = _re.search(r'(?:after|since|from|starting)\s+(\d{4}-\d{1,2}-\d{1,2})', q)
+            _bef = _re.search(r'(?:before|until|till|up to|by)\s+(\d{4}-\d{1,2}-\d{1,2})', q)
+            _my  = _re.search(r'\b([a-z]+)\s+(\d{4})\b', q)
+            _yr  = _re.search(r'\b(?:in|during|for|year)\s+(\d{4})\b', q)
+
+            if _btw:
+                _d1 = pd.to_datetime(_btw.group(1), errors="coerce")
+                _d2 = pd.to_datetime(_btw.group(2), errors="coerce")
+                if pd.notna(_d1) and pd.notna(_d2):
+                    _lo, _hi = min(_d1, _d2), max(_d1, _d2)
+                    mask &= _dser.between(_lo, _hi)
+                    summary_parts.append(f"{_dcol} between {_lo.date()} and {_hi.date()}")
+                    _date_applied = True
+            if not _date_applied and (_aft or _bef):
+                if _aft:
+                    _d1 = pd.to_datetime(_aft.group(1), errors="coerce")
+                    if pd.notna(_d1):
+                        mask &= _dser >= _d1
+                        summary_parts.append(f"{_dcol} on/after {_d1.date()}")
+                        _date_applied = True
+                if _bef:
+                    _d2 = pd.to_datetime(_bef.group(1), errors="coerce")
+                    if pd.notna(_d2):
+                        mask &= _dser <= _d2
+                        summary_parts.append(f"{_dcol} on/before {_d2.date()}")
+                        _date_applied = True
+            if not _date_applied and _my and _my.group(1) in _MONTHS:
+                _mo = _MONTHS[_my.group(1)]; _yy = int(_my.group(2))
+                mask &= (_dser.dt.year == _yy) & (_dser.dt.month == _mo)
+                summary_parts.append(f"{_dcol} in {_my.group(1).title()} {_yy}")
+                _date_applied = True
+            if not _date_applied and _yr:
+                _yy = int(_yr.group(1))
+                mask &= _dser.dt.year == _yy
+                summary_parts.append(f"{_dcol} in {_yy}")
+                _date_applied = True
 
     # ── 10. Aggregation: which column has most issues ──────────────────────────
     # Only trigger on explicit grouping language — NOT on "top/worst/best" (those = limit)
     AGG_TRIGGERS = {"which","who","breakdown","group"}
+    _FREQ_AGG_PHRASES = {"most used","most common","most popular","most frequent",
+                         "highest used","most occurrences","used most","commonly used"}
     # Check raw query q (not toks) — "which/who" are stripped by _STOPWORDS
-    agg_phrase   = any(w in q.split() for w in AGG_TRIGGERS)
+    # IMPORTANT: freq phrases ("highest used" etc.) must NOT steal "Top N entity" queries —
+    # those belong to block 11 which handles them with correct count-sort logic
+    _has_top_n   = bool(_re.search(r'top\s+\d+', q))
+    agg_phrase   = any(w in q.split() for w in AGG_TRIGGERS) or (
+        any(p in q for p in _FREQ_AGG_PHRASES) and not _has_top_n
+    )
     # Also catch "by <col>" pattern explicitly
     by_m = _re.search(r'\bby\s+([\w_]+)', q)
     if agg_phrase or (by_m and not _re.search(r'top\s+\d+', q)):
@@ -342,32 +559,76 @@ def parse_nlq(query: str, df: "pd.DataFrame", col_mapping: dict) -> dict:
     # ── 11. Top N ─────────────────────────────────────────────────────────────
     top_m = _re.search(r'top\s+(\d+)', q)
     # Entity words: when "top N [entities]" refers to groups, not individual records
+    # Covers all 6 demo domains + generic groupable nouns
     _ENTITY_WORDS = {
+        # Finance / generic
         "companies","company","vendors","vendor","reps","rep","customers","customer",
         "products","product","suppliers","supplier","teams","team","regions","region",
         "departments","department","categories","category","channels","channel",
         "accounts","account","clients","client","partners","partner",
+        # Sales / CRM
+        "stages","stage","sources","source","leads","lead",
+        # HR / People
+        "employees","employee","managers","manager","locations","location",
+        "titles","title","roles","role","ratings","rating",
+        # E-commerce / Supply-chain
+        "orders","order","shipments","shipment","warehouses","warehouse",
+        "carriers","carrier","methods","method","countries","country",
+        "origins","origin","statuses","status",
+        # Product Analytics
+        "platforms","platform","events","event","features","feature",
+        "tiers","tier","types","type","users","user","sessions","session",
+        "pages","page","devices","device","browsers","browser",
     }
+    # Detect frequency-intent: "most used", "most common", "most popular",
+    # "highest used", "most frequent", "popular", "common", "used most"
+    _FREQ_PHRASES = {"most used","most common","most popular","most frequent",
+                     "highest used","used most","popular","commonly used","frequently used"}
+    freq_intent = any(p in q for p in _FREQ_PHRASES)
+
     if top_m:
         limit = int(top_m.group(1))
         toks_set = set(_tokens(q))
-        entity_hit = toks_set & _ENTITY_WORDS
+        # Also check raw q.split() for entity words (some are stripped by stopwords)
+        raw_toks = set(w.lower() for w in q.split())
+        entity_hit = (toks_set | raw_toks) & _ENTITY_WORDS
         if entity_hit and intent != "aggregate":
-            # "Top 5 companies by revenue" → aggregate by best-matching cat col
+            # "Top 10 highest used platforms" / "Top 5 companies by revenue"
             entity_word = entity_hit.pop()
+            # Match to a categorical column — try entity word against col name
             grp_col = next(
                 (c for c in cat_cols if c in df.columns and
-                 any(h in c.lower() for h in [entity_word, entity_word.rstrip("s")])),
+                 any(h in c.lower() for h in [entity_word, entity_word.rstrip("s"),
+                                               entity_word + "s"])),
                 None
             )
+            # Fallback: find first cat col whose name appears anywhere in the query
+            if not grp_col:
+                grp_col = next(
+                    (c for c in cat_cols if c in df.columns and
+                     (c.lower() in q or c.split("_")[0].lower() in q)),
+                    None
+                )
             if not grp_col and cat_cols:
                 grp_col = next((c for c in cat_cols if c in df.columns), None)
             if grp_col:
-                # Determine metric to aggregate: use mentioned numeric col or dq_score
-                metric_col = (matched_col if (num_m and matched_col and
-                               matched_col in df.columns and
-                               pd.api.types.is_numeric_dtype(df[matched_col]))
-                              else "dq_score")
+                # Determine sort metric:
+                # frequency-intent  → sort by Records (count) DESC
+                # explicit num col  → sort by that col avg DESC
+                # default           → sort by Avg DQ Score ASC (worst first)
+                if freq_intent:
+                    metric_col  = "dq_score"
+                    sort_by_col = "Records"
+                    sort_asc_agg = False
+                elif num_m and matched_col and matched_col in df.columns and pd.api.types.is_numeric_dtype(df[matched_col]):
+                    metric_col  = matched_col
+                    sort_by_col = f"Avg {metric_col.replace('_',' ').title()}"
+                    sort_asc_agg = False
+                else:
+                    metric_col  = "dq_score"
+                    sort_by_col = "Avg DQ Score"
+                    sort_asc_agg = True   # worst-first (lowest score = most issues)
+
                 intent = "aggregate"
                 agg_df = (
                     df[mask].groupby(grp_col, dropna=False)
@@ -385,12 +646,13 @@ def parse_nlq(query: str, df: "pd.DataFrame", col_mapping: dict) -> dict:
                         "avg_score": "Avg DQ Score",
                         "critical": "Critical Issues",
                     })
-                    .sort_values(f"Avg {metric_col.replace('_',' ').title()}", ascending=False)
+                    .sort_values(sort_by_col, ascending=sort_asc_agg)
                     .head(limit)
                 )
                 agg_df[f"Avg {metric_col.replace('_',' ').title()}"] = (
                     agg_df[f"Avg {metric_col.replace('_',' ').title()}"].round(1))
-                summary_parts.append(f"top {limit} {entity_word} by {metric_col.replace('_',' ')}")
+                freq_label = "most used " if freq_intent else ""
+                summary_parts.append(f"top {limit} {freq_label}{entity_word} by {'count' if freq_intent else metric_col.replace('_',' ')}")
                 limit = None  # already sliced in agg_df
         else:
             # Records-based top N — sort by relevant numeric col or dq_score
@@ -449,7 +711,101 @@ NLQ_EXAMPLES = [
     "Records with format accuracy below 50",
     "Grade F records",
     "Show flagged records sorted by risk",
+    "High or critical records",
 ]
+
+
+def _dynamic_examples(df: pd.DataFrame, col_mapping: dict) -> list:
+    """
+    Generate context-aware NLQ queries based on the actual uploaded dataset.
+    Every query here is verified to match the NLQ parser's patterns — no dead ends.
+    """
+    examples = []
+    num_cols  = col_mapping.get("numeric_columns", [])
+    cat_cols  = col_mapping.get("categorical_columns", [])
+    date_cols = col_mapping.get("date_columns", [])
+
+    # ── Tier 1: DQ queries that always work (engine-native) ──────────────────
+    examples += [
+        "Show critical records",
+        "Find anomalous records",
+        "Grade F records",
+        "Records with score below 60",
+    ]
+
+    # ── Tier 2: Categorical column aggregations (uses "which … has most issues")
+    # Pattern: "Which <col> has the most issues" → triggers AGG_TRIGGERS via "which"
+    for col in cat_cols[:3]:
+        if col in df.columns:
+            clean = col.replace("_", " ")
+            examples.append(f"Which {clean} has the most issues")
+
+    # ── Tier 3: Top-N frequency aggregation (uses "Top N most used <col>")
+    # Pattern: "Top N most used <col>" → entity_hit + freq_intent
+    for col in cat_cols[:2]:
+        if col in df.columns:
+            # Use singular form as the "entity word" — engine strips trailing s
+            entity = col.replace("_", " ").rstrip("s")
+            n_unique = df[col].nunique()
+            top_n = min(5, max(3, n_unique // 2))
+            examples.append(f"Top {top_n} most used {entity}")
+
+    # ── Tier 4: Numeric threshold queries (uses actual p75 / p25 values)
+    # Pattern: "Show records where <col> is above/below <value>"
+    for col in num_cols[:2]:
+        if col in df.columns:
+            num_series = pd.to_numeric(df[col], errors="coerce").dropna()
+            if len(num_series) > 5:
+                clean = col.replace("_", " ")
+                try:
+                    q75 = num_series.quantile(0.75)
+                    # Only emit if value is sensible (positive, non-trivial)
+                    if q75 > 0:
+                        examples.append(f"Records where {clean} is above {int(q75):,}")
+                except Exception:
+                    pass
+
+    # ── Tier 4b: Multi-condition AND/OR (v2.7)
+    if num_cols:
+        _c0 = num_cols[0]
+        _s = pd.to_numeric(df[_c0], errors="coerce").dropna()
+        if len(_s) > 5:
+            try:
+                _q75 = _s.quantile(0.75)
+                if _q75 > 0:
+                    examples.append(
+                        f"Critical records and {_c0.replace('_',' ')} above {int(_q75):,}")
+            except Exception:
+                pass
+    examples.append("High or critical records")
+
+    # ── Tier 5: Date / null queries + date-range (v2.6)
+    for col in date_cols[:1]:
+        examples.append(f"Show records with missing {col.replace('_', ' ')}")
+        try:
+            _ds = pd.to_datetime(df[col], errors="coerce").dropna()
+            if len(_ds) > 5:
+                _yr = int(_ds.dt.year.median())
+                examples.append(f"Records after {_yr}-01-01")
+        except Exception:
+            pass
+
+    # ── Tier 6: Always-useful fallbacks ──────────────────────────────────────
+    examples += [
+        "Show records with missing values",
+        "Top 20 worst records",
+        "Find duplicate records",
+    ]
+
+    # Deduplicate while preserving order, cap at 12
+    seen = set(); out = []
+    for ex in examples:
+        key = ex.lower().strip()
+        if key not in seen:
+            seen.add(key); out.append(ex)
+        if len(out) >= 12:
+            break
+    return out
 
 
 # ── Column-type metadata ──────────────────────────────────────────────────────
@@ -553,15 +909,47 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    null_fill_str = st.text_input("Fill empty text with", "UNKNOWN")
-    null_fill_num = st.number_input("Fill empty numbers with", value=0.0)
-    min_amount    = st.number_input("Minimum valid number", value=0.0)
-    max_amount    = st.number_input("Maximum valid number", value=10_000_000.0, step=100_000.0)
-    outlier_z     = st.number_input("Outlier sensitivity (higher = less strict)", value=3.0, step=0.5)
-    dup_cols      = st.text_input("Duplicate key columns (;-separated, blank = all)", "")
+    null_fill_str = st.text_input(
+        "Fill empty text with", "UNKNOWN",
+        help="Placeholder for blank text / categorical cells. Affects the COMPLETENESS "
+             "score — rows that needed filling are flagged as having had missing data.")
+    null_fill_num = st.number_input(
+        "Fill empty numbers with", value=0.0,
+        help="Value substituted for blank numeric cells. Affects COMPLETENESS. "
+             "Use 0 for counts/amounts; consider the column median for rates.")
+    min_amount    = st.number_input(
+        "Minimum valid number", value=0.0,
+        help="Lower bound for valid numeric values. Numbers below this are treated as "
+             "out-of-range and penalise the ACCURACY score.")
+    max_amount    = st.number_input(
+        "Maximum valid number", value=10_000_000.0, step=100_000.0,
+        help="Upper bound for valid numeric values. Numbers above this are treated as "
+             "out-of-range and penalise the ACCURACY score.")
+    outlier_z     = st.number_input(
+        "Outlier sensitivity (higher = less strict)", value=3.0, step=0.5,
+        help="Z-score threshold for outlier flagging. Lower = stricter (more rows flagged). "
+             "Feeds anomaly detection and the ACCURACY score. Typical range 2.5-3.5.")
+    dup_cols      = st.text_input(
+        "Duplicate key columns (;-separated, blank = all)", "",
+        help="Columns that define a duplicate. Blank = an exact copy across ALL columns. "
+             "Drives the UNIQUENESS score and the de-duplication step.")
+
+    with st.expander("ℹ️ How these settings affect your score"):
+        st.markdown(
+            "- **Fill values** → **Completeness (20%)**: blanks are filled, then the row is "
+            "flagged as having had missing data.\n"
+            "- **Min / Max valid number** → **Accuracy (35%)**: values outside the range are "
+            "penalised as out-of-range.\n"
+            "- **Outlier sensitivity** → **Accuracy + anomaly flag**: statistical outliers are "
+            "detected per numeric column (lower = stricter).\n"
+            "- **Duplicate key columns** → **Uniqueness (5%)**: defines what counts as a "
+            "duplicate row.\n\n"
+            "Scoring weights — Completeness 20% · Validity 25% · Accuracy 35% · "
+            "Consistency 15% · Uniqueness 5%."
+        )
 
     st.divider()
-    st.caption("Built by Akshay — Data Engineer · v2.4")
+    st.caption("Built by Akshay — Data Engineer · v2.7")
 
 CONFIG = {
     "null_fill_string":         null_fill_str,
@@ -713,33 +1101,60 @@ def generate_demo(n: int = 300, seed: int = 42, domain: str = "finance") -> pd.D
     df = pd.DataFrame(rows)
 
     # ── Guarantee dirty data: inject known-bad rows ───────────────────────────
+    # Identify numeric columns (excluding ID/index column)
+    _num_cols = [c for c in df.columns
+                 if df[c].dtype in [float, int] and c != df.columns[0]]
+    _str_cols = [c for c in df.columns if df[c].dtype == object]
+    _date_cols = [c for c in df.columns
+                  if any(h in c.lower() for h in ("date","time","day","month","year"))]
+
     # 1. Duplicates (~7%)
     n_dupes = max(8, int(len(df) * 0.07))
     dupes   = df.sample(min(n_dupes, len(df)), random_state=seed+1).copy()
 
-    # 2. All-null rows (2% of n) — forces completeness failures
+    # 2. All-null rows (2% of n) — forces completeness = 0 → CRITICAL
     null_rows = pd.DataFrame([{c: None for c in df.columns}
-                               for _ in range(max(3, n // 50))])
+                               for _ in range(max(5, n // 40))])
 
-    # 3. Extreme-value rows — forces outlier/accuracy failures
-    extreme_rows = df.sample(min(5, len(df)), random_state=seed+2).copy()
-    num_cols = [c for c in df.columns if df[c].dtype in [float, int]
-                and c not in [df.columns[0]]]
-    for col in num_cols[:2]:
-        extreme_rows[col] = extreme_rows[col] * 999  # blow out the range
+    # 3. CRITICAL accuracy rows — large NEGATIVE values on ALL numeric cols
+    #    This triggers: _negative + _outlier flags on every num col
+    #    With N num cols: penalty = (neg_pen + out_pen) × N >> 70 → accuracy < 30 → CRITICAL
+    n_crit = max(15, n // 20)          # ~5% guaranteed CRITICAL rows
+    crit_rows = df.sample(min(n_crit, len(df)), random_state=seed+2).copy()
+    for col in _num_cols:
+        # Large negative absolute value: triggers _negative AND _outlier
+        crit_rows[col] = -999_999_999.0
 
-    # 4. Empty-string rows for text columns
-    blank_rows = df.sample(min(4, len(df)), random_state=seed+3).copy()
-    str_cols = [c for c in df.columns if df[c].dtype == object]
-    for col in str_cols[:3]:
-        blank_rows[col] = random.choice(["", "  ", "NULL", "N/A", "UNKNOWN", None])
+    # 4. Consistency-violation rows — inverted date pairs (end before start)
+    #    Forces dq_score_consistency < 40 → CRITICAL
+    n_cons = max(10, n // 30)
+    cons_rows = df.sample(min(n_cons, len(df)), random_state=seed+5).copy()
+    # Swap every pair of date columns to force ordering violations
+    if len(_date_cols) >= 2:
+        for i in range(0, len(_date_cols) - 1, 2):
+            c1, c2 = _date_cols[i], _date_cols[i + 1]
+            # Set c1 to a far-future date and c2 to a far-past date → consistency violation
+            cons_rows[c1] = "2099-12-31"
+            cons_rows[c2] = "2000-01-01"
+    elif len(_date_cols) == 1:
+        cons_rows[_date_cols[0]] = "9999-99-99"  # unparseable → validity hit
+    # Also make these rows have negative numerics → CRITICAL via accuracy too
+    for col in _num_cols:
+        cons_rows[col] = -999_999.0
 
-    # 5. Contradictory / impossible values
-    bad_rows = df.sample(min(4, len(df)), random_state=seed+4).copy()
-    for col in num_cols[:1]:
-        bad_rows[col] = -abs(bad_rows[col]) * 10  # negative where impossible
+    # 5. Empty-string / placeholder rows — forces validity failures
+    blank_rows = df.sample(min(8, len(df)), random_state=seed+3).copy()
+    for col in _str_cols[:4]:
+        blank_rows[col] = random.choice(["", "  ", "NULL", "N/A", "UNKNOWN", "???"])
+    for col in _num_cols[:2]:
+        blank_rows[col] = None   # null numeric → completeness hit
 
-    df = (pd.concat([df, dupes, null_rows, extreme_rows, blank_rows, bad_rows],
+    # 6. Mixed-type / garbage rows — format accuracy failures
+    bad_rows = df.sample(min(6, len(df)), random_state=seed+4).copy()
+    for col in _num_cols:
+        bad_rows[col] = -abs(bad_rows[col].fillna(0)) * 100  # negative, also outlier
+
+    df = (pd.concat([df, dupes, null_rows, crit_rows, cons_rows, blank_rows, bad_rows],
                     ignore_index=True)
             .sample(frac=1, random_state=seed)
             .reset_index(drop=True))
@@ -1177,7 +1592,7 @@ st.markdown("""
     <div style="text-align:right;flex-shrink:0;">
       <span style="background:#915466;color:#FDFFFF;font-size:11px;font-weight:700;
                    padding:6px 14px;border-radius:20px;letter-spacing:0.8px;
-                   border:1.5px solid #C79192;">v2.4</span>
+                   border:1.5px solid #C79192;">v2.7</span>
       <p style="color:#C79192;font-size:10px;margin:6px 0 0;letter-spacing:0.5px;text-transform:uppercase;">Universal DQ Platform</p>
     </div>
   </div>
@@ -1192,7 +1607,7 @@ st.subheader("📂 Start here — upload your data")
 src_col1, src_col2 = st.columns([3, 1])
 with src_col1:
     uploaded_file = st.file_uploader(
-        "Upload any CSV — finance, HR, sales, supply chain, or anything else",
+        "Upload your data CSV",
         type=["csv"],
         help="The pipeline auto-detects column types and applies the right checks.",
     )
@@ -1228,7 +1643,7 @@ if gen_btn:
                 padding:12px 16px;margin-top:8px;font-size:13px;color:#23022E;">
       <strong>What this data contains:</strong> intentional nulls · duplicates ·
       extreme values · bad formats · blank strings — ready to stress-test the pipeline.<br>
-      <strong>Next:</strong> scroll down → click <strong>🚀 Analyse My Data</strong> →
+      <strong>Next:</strong> scroll down → click <strong>🔍 Analyse Data</strong> →
       then open the <strong>💬 Ask Your Data</strong> tab to explore results.
     </div>
     """, unsafe_allow_html=True)
@@ -1406,21 +1821,7 @@ if "input_df" in st.session_state:
     st.divider()
 
     # ─── Run Pipeline ────────────────────────────────────────────────────────
-    st.markdown("""
-    <div style="background:linear-gradient(135deg,#23022E,#3D1040);border-radius:14px;
-                padding:20px 28px;margin-bottom:16px;border:1px solid #915466;
-                text-align:center;">
-      <p style="color:#C79192;font-size:12px;font-weight:700;letter-spacing:1px;
-                text-transform:uppercase;margin:0 0 6px;">Ready to analyse?</p>
-      <p style="color:#FDFFFF;font-size:15px;font-weight:600;margin:0 0 4px;">
-        Run the full AI quality pipeline on your data
-      </p>
-      <p style="color:#C79192;font-size:12px;margin:0;">
-        Cleaning · Scoring · Anomaly Detection — all in one click
-      </p>
-    </div>
-    """, unsafe_allow_html=True)
-    if st.button("🚀 Analyse My Data — Run Full Pipeline", type="primary", use_container_width=True):
+    if st.button("🔍 Analyse Data", type="primary", use_container_width=True):
         with st.spinner("Cleaning data…"):
             cleaned_df, clean_stats = run_cleaning(input_df, col_mapping)
         with st.spinner("Scoring across 5 dimensions…"):
@@ -1433,6 +1834,7 @@ if "input_df" in st.session_state:
         n_anom = int(scored_df.get("is_anomaly", pd.Series(dtype=bool)).sum())
         st.success(f"Pipeline complete — {len(scored_df):,} records scored · {n_anom} anomalies detected.")
         st.info("💬 **Next step:** Click the **Ask Your Data** tab (second tab) to query your results in plain English.")
+    st.caption("Runs cleaning · scoring · anomaly detection across all dimensions")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2497,18 +2899,28 @@ if "scored_df" in st.session_state:
             </div>
             """, unsafe_allow_html=True)
 
-        # ── Example chips — collapsible, always below results ────────────────
-        with st.expander("💡 Example queries — click any to run instantly", expanded=not bool(active_query)):
-            st.markdown('<p style="color:#5E6472;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;margin:0 0 8px;">Try these examples</p>', unsafe_allow_html=True)
-            chip_rows = [NLQ_EXAMPLES[:4], NLQ_EXAMPLES[4:8], NLQ_EXAMPLES[8:]]
-            for row in chip_rows:
-                cols = st.columns(len(row))
-                for i, example in enumerate(row):
-                    with cols[i]:
-                        if st.button(example, key=f"chip_{example}", use_container_width=True):
-                            st.session_state["nlq_chip"] = example
+        # ── Example chips — dynamic based on actual dataset ────────────────
+        with st.expander("💡 Example queries — based on your data", expanded=not bool(active_query)):
+            # Generate context-aware examples from actual columns; fall back to generic
+            try:
+                _q_examples = _dynamic_examples(df_f, col_mapping)
+            except Exception:
+                _q_examples = NLQ_EXAMPLES
+            st.markdown(
+                '<p style="color:#5E6472;font-size:11px;font-weight:700;letter-spacing:0.8px;'
+                'text-transform:uppercase;margin:0 0 8px;">Suggestions based on your columns</p>',
+                unsafe_allow_html=True,
+            )
+            # Render in rows of 3
+            for _row_start in range(0, len(_q_examples), 3):
+                _row = _q_examples[_row_start:_row_start + 3]
+                _cols = st.columns(len(_row))
+                for _ci, _ex in enumerate(_row):
+                    with _cols[_ci]:
+                        if st.button(_ex, key=f"chip_{_row_start}_{_ci}", use_container_width=True):
+                            st.session_state["nlq_chip"] = _ex
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption("DataQual AI · Universal Data Quality Platform · v2.4 · Built by Akshay")
+st.caption("DataQual AI · Universal Data Quality Platform · v2.7 · Built by Akshay")
