@@ -1,5 +1,5 @@
 """
-app.py — DataQual AI  v2.4
+app.py — DataQual AI  v2.6
 =============================================
 Universal AI-powered DQ platform.
 Works with ANY dataset — no domain selection needed.
@@ -31,7 +31,7 @@ from sklearn.ensemble import IsolationForest
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="DataQual AI — v2.4",
+    page_title="DataQual AI — v2.6",
     page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -127,7 +127,7 @@ def section_head(title, subtitle=""):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NATURAL LANGUAGE QUERY ENGINE  (v2.4)
+# NATURAL LANGUAGE QUERY ENGINE  (v2.4 → v2.6)
 # ═══════════════════════════════════════════════════════════════════════════════
 import re as _re
 
@@ -308,6 +308,60 @@ def parse_nlq(query: str, df: "pd.DataFrame", col_mapping: dict) -> dict:
             if hit.sum() > 0:
                 mask &= hit
                 summary_parts.append(f"{matched_col} contains '{val_hint}'")
+
+    # ── 9b. Date-range filter  (v2.6) ─────────────────────────────────────────
+    # Supports: "after 2023-06-01", "before 2024-01-01", "since 2023-01-01",
+    #           "between 2023-01-01 and 2023-12-31", "in January 2024", "in 2024".
+    # Date columns are stored as "%Y-%m-%d" strings post-cleaning → re-parse here.
+    _present_date_cols = [c for c in col_mapping.get("date_columns", []) if c in df.columns]
+    if _present_date_cols:
+        _dcol = next((c for c in _present_date_cols
+                      if c.lower() in q or c.split("_")[0].lower() in q),
+                     _present_date_cols[0])
+        _dser = pd.to_datetime(df[_dcol], errors="coerce")
+        _MONTHS = {"january":1,"february":2,"march":3,"april":4,"may":5,"june":6,
+                   "july":7,"august":8,"september":9,"october":10,"november":11,
+                   "december":12,"jan":1,"feb":2,"mar":3,"apr":4,"jun":6,"jul":7,
+                   "aug":8,"sep":9,"sept":9,"oct":10,"nov":11,"dec":12}
+        _date_applied = False
+
+        _btw = _re.search(r'between\s+(\d{4}-\d{1,2}-\d{1,2})\s+and\s+(\d{4}-\d{1,2}-\d{1,2})', q)
+        _aft = _re.search(r'(?:after|since|from|starting)\s+(\d{4}-\d{1,2}-\d{1,2})', q)
+        _bef = _re.search(r'(?:before|until|till|up to|by)\s+(\d{4}-\d{1,2}-\d{1,2})', q)
+        _my  = _re.search(r'\b([a-z]+)\s+(\d{4})\b', q)
+        _yr  = _re.search(r'\b(?:in|during|for|year)\s+(\d{4})\b', q)
+
+        if _btw:
+            _d1 = pd.to_datetime(_btw.group(1), errors="coerce")
+            _d2 = pd.to_datetime(_btw.group(2), errors="coerce")
+            if pd.notna(_d1) and pd.notna(_d2):
+                _lo, _hi = min(_d1, _d2), max(_d1, _d2)
+                mask &= _dser.between(_lo, _hi)
+                summary_parts.append(f"{_dcol} between {_lo.date()} and {_hi.date()}")
+                _date_applied = True
+        if not _date_applied and (_aft or _bef):
+            if _aft:
+                _d1 = pd.to_datetime(_aft.group(1), errors="coerce")
+                if pd.notna(_d1):
+                    mask &= _dser >= _d1
+                    summary_parts.append(f"{_dcol} on/after {_d1.date()}")
+                    _date_applied = True
+            if _bef:
+                _d2 = pd.to_datetime(_bef.group(1), errors="coerce")
+                if pd.notna(_d2):
+                    mask &= _dser <= _d2
+                    summary_parts.append(f"{_dcol} on/before {_d2.date()}")
+                    _date_applied = True
+        if not _date_applied and _my and _my.group(1) in _MONTHS:
+            _mo = _MONTHS[_my.group(1)]; _yy = int(_my.group(2))
+            mask &= (_dser.dt.year == _yy) & (_dser.dt.month == _mo)
+            summary_parts.append(f"{_dcol} in {_my.group(1).title()} {_yy}")
+            _date_applied = True
+        if not _date_applied and _yr:
+            _yy = int(_yr.group(1))
+            mask &= _dser.dt.year == _yy
+            summary_parts.append(f"{_dcol} in {_yy}")
+            _date_applied = True
 
     # ── 10. Aggregation: which column has most issues ──────────────────────────
     # Only trigger on explicit grouping language — NOT on "top/worst/best" (those = limit)
@@ -563,9 +617,16 @@ def _dynamic_examples(df: pd.DataFrame, col_mapping: dict) -> list:
                 except Exception:
                     pass
 
-    # ── Tier 5: Date / null queries
+    # ── Tier 5: Date / null queries + date-range (v2.6)
     for col in date_cols[:1]:
         examples.append(f"Show records with missing {col.replace('_', ' ')}")
+        try:
+            _ds = pd.to_datetime(df[col], errors="coerce").dropna()
+            if len(_ds) > 5:
+                _yr = int(_ds.dt.year.median())
+                examples.append(f"Records after {_yr}-01-01")
+        except Exception:
+            pass
 
     # ── Tier 6: Always-useful fallbacks ──────────────────────────────────────
     examples += [
@@ -686,15 +747,47 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    null_fill_str = st.text_input("Fill empty text with", "UNKNOWN")
-    null_fill_num = st.number_input("Fill empty numbers with", value=0.0)
-    min_amount    = st.number_input("Minimum valid number", value=0.0)
-    max_amount    = st.number_input("Maximum valid number", value=10_000_000.0, step=100_000.0)
-    outlier_z     = st.number_input("Outlier sensitivity (higher = less strict)", value=3.0, step=0.5)
-    dup_cols      = st.text_input("Duplicate key columns (;-separated, blank = all)", "")
+    null_fill_str = st.text_input(
+        "Fill empty text with", "UNKNOWN",
+        help="Placeholder for blank text / categorical cells. Affects the COMPLETENESS "
+             "score — rows that needed filling are flagged as having had missing data.")
+    null_fill_num = st.number_input(
+        "Fill empty numbers with", value=0.0,
+        help="Value substituted for blank numeric cells. Affects COMPLETENESS. "
+             "Use 0 for counts/amounts; consider the column median for rates.")
+    min_amount    = st.number_input(
+        "Minimum valid number", value=0.0,
+        help="Lower bound for valid numeric values. Numbers below this are treated as "
+             "out-of-range and penalise the ACCURACY score.")
+    max_amount    = st.number_input(
+        "Maximum valid number", value=10_000_000.0, step=100_000.0,
+        help="Upper bound for valid numeric values. Numbers above this are treated as "
+             "out-of-range and penalise the ACCURACY score.")
+    outlier_z     = st.number_input(
+        "Outlier sensitivity (higher = less strict)", value=3.0, step=0.5,
+        help="Z-score threshold for outlier flagging. Lower = stricter (more rows flagged). "
+             "Feeds anomaly detection and the ACCURACY score. Typical range 2.5-3.5.")
+    dup_cols      = st.text_input(
+        "Duplicate key columns (;-separated, blank = all)", "",
+        help="Columns that define a duplicate. Blank = an exact copy across ALL columns. "
+             "Drives the UNIQUENESS score and the de-duplication step.")
+
+    with st.expander("ℹ️ How these settings affect your score"):
+        st.markdown(
+            "- **Fill values** → **Completeness (20%)**: blanks are filled, then the row is "
+            "flagged as having had missing data.\n"
+            "- **Min / Max valid number** → **Accuracy (35%)**: values outside the range are "
+            "penalised as out-of-range.\n"
+            "- **Outlier sensitivity** → **Accuracy + anomaly flag**: statistical outliers are "
+            "detected per numeric column (lower = stricter).\n"
+            "- **Duplicate key columns** → **Uniqueness (5%)**: defines what counts as a "
+            "duplicate row.\n\n"
+            "Scoring weights — Completeness 20% · Validity 25% · Accuracy 35% · "
+            "Consistency 15% · Uniqueness 5%."
+        )
 
     st.divider()
-    st.caption("Built by Akshay — Data Engineer · v2.4")
+    st.caption("Built by Akshay — Data Engineer · v2.6")
 
 CONFIG = {
     "null_fill_string":         null_fill_str,
@@ -1337,7 +1430,7 @@ st.markdown("""
     <div style="text-align:right;flex-shrink:0;">
       <span style="background:#915466;color:#FDFFFF;font-size:11px;font-weight:700;
                    padding:6px 14px;border-radius:20px;letter-spacing:0.8px;
-                   border:1.5px solid #C79192;">v2.4</span>
+                   border:1.5px solid #C79192;">v2.6</span>
       <p style="color:#C79192;font-size:10px;margin:6px 0 0;letter-spacing:0.5px;text-transform:uppercase;">Universal DQ Platform</p>
     </div>
   </div>
@@ -2668,4 +2761,4 @@ if "scored_df" in st.session_state:
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption("DataQual AI · Universal Data Quality Platform · v2.4 · Built by Akshay")
+st.caption("DataQual AI · Universal Data Quality Platform · v2.6 · Built by Akshay")
