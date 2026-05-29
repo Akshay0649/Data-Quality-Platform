@@ -4,11 +4,13 @@
 pandas>=2.0.0
 numpy>=1.24.0
 
-# Database connectivity
-sqlalchemy>=2.0.0
-
-# SQL Server / Azure SQL (comment out if only using demo mode)
-pyodbc>=4.0.39
+# ── Optional: LOCAL database mode only — NOT used by the Streamlit app ──────────
+# pyodbc cannot build on Streamlit Cloud without a packages.txt providing
+# `unixodbc-dev`; that failing build is what froze the live deploy at an old
+# version. app.py / llm_nlq.py / run_manifest.py never import these. To use the
+# DB connector locally, uncomment BOTH lines AND add a packages.txt with `unixodbc-dev`.
+# sqlalchemy>=2.0.0
+# pyodbc>=4.0.39
 
 # Streamlit app
 streamlit>=1.35.0
