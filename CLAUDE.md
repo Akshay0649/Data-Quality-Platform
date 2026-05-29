@@ -24,14 +24,14 @@ Supporting files: `cleaner.py`, `scorer.py`, `pipeline.py`, `db_connector.py`, `
 ## v2.7 — SHIPPED (PR #1 open)
 Multi-condition AND/OR NLQ · date-range NLQ · config explainer · version stamp. **PR #1** open against `main` (branch `feature/nlq-v2.7-multicondition`, `app.py` only). Live app lags until merged + Streamlit Cloud redeploys. Local backups `app_backup_v26_live.py` / `app_backup_v251.py` must NOT be committed (`git add app.py`, never `git add .`).
 
-## v3.0 Phase 2 — LLM NLQ + persistence (done locally, NOT yet committed)
+## v3.0 Phase 2 + B2 — LLM NLQ · persistence · executive scorecard (PR #2)
 Two NEW modules, **stdlib + pandas only — ZERO new pip deps** (keeps the $0 promise):
 - **`llm_nlq.py`** — optional, privacy-first LLM NLQ. NL → strict JSON "query plan" (`QUERY_PLAN_SCHEMA`) via any OpenAI-compatible **free tier** (Groq default; Gemini / OpenRouter presets, BYO key). Our own deterministic `validate_plan()` + `execute_plan()` run the plan and return the SAME dict contract as `parse_nlq`. **Privacy:** only column names/types are sent — never data rows (categorical sample values are opt-in, default OFF). `CostGuard` caps calls/chars per session. Transparent fallback to `parse_nlq` on disable / over-budget / error / invalid plan. Entry point: `smart_query()`.
-- **`run_manifest.py`** — B1 keystone. `build_manifest()` → portable JSON (per-dimension scores, row/issue counts, grade+severity dist, `dataset_signature`, timestamp). `manifests_to_trend_df` / `compute_deltas` / `evaluate_slas` seed B2. `StorageBackend` interface (JSONFileStore now; DuckDB/Postgres are a documented seam) = **the migration contract** (same schema all the way to the platform phase).
+- **`run_manifest.py`** — B1 keystone. `build_manifest()` → portable JSON (per-dimension scores, row/issue counts, grade+severity dist, `dataset_signature`, timestamp). `manifests_to_trend_df` / `compute_deltas` / `evaluate_slas` / **`build_scorecard` + `exec_summary_html` (B2)**. `StorageBackend` interface (JSONFileStore now; DuckDB/Postgres are a documented seam) = **the migration contract** (same schema all the way to the platform phase).
 
-**app.py wiring:** sidebar "🤖 Smart Query" expander (opt-in, default OFF; provider/model/key/cost-cap/privacy toggle) → builds `LLM_CFG` + session `CostGuard`; `_smart_nlq()` router replaces BOTH `parse_nlq` UI call sites (Ask tab + Dashboard quick bar) and shows an engine badge; new **"🕒 History" tab (tab10)** = download/upload manifests + trend lines + deltas. `.streamlit/secrets.toml` is git-ignored — put `LLM_API_KEY` there.
+**app.py wiring:** sidebar "🤖 Smart Query" expander (opt-in, default OFF; provider/model/key/cost-cap/privacy toggle) → builds `LLM_CFG` + session `CostGuard`; `_smart_nlq()` router replaces BOTH `parse_nlq` UI call sites (Ask tab + Dashboard quick bar) and shows an engine badge; new **"🎯 Scorecard" tab (2nd tab, `tab_sc`)** = SLA target inputs → PASS/AT-RISK/FAIL status + per-area pass/fail grid + printable HTML export + optional prev-manifest deltas; new **"🕒 History" tab (`tab10`)** = download/upload manifests + trend lines + deltas. NOTE: Scorecard was inserted at tab-list position 2 as `tab_sc`, so `tab2`–`tab10` still map to Ask…History unchanged. `.streamlit/secrets.toml` is git-ignored — put `LLM_API_KEY` there.
 
-Verified: `python -m py_compile` clean on all 3 files; `_selftest_phase2.py` = **23/23** offline checks. NOT yet run inside live Streamlit (no local streamlit env) → smoke-test on Cloud after deploy.
+Verified: `py_compile` clean; `_selftest_phase2.py` = **30/30** offline checks; headless Streamlit **AppTest** (streamlit 1.58 now installed locally) drives demo→score→**11 tabs**→NLQ→scorecard with **no exceptions**. `_selftest_phase2.py` is a local-only regression test (not committed; promote to `tests/` later).
 
 ## North-star architecture (Anomalo-grade target)
 Layers: (1) connectors/ingest · (2) check engine [HAVE: `run_scoring` + IsolationForest] · (3) results store [BUILDING: `run_manifest` → DuckDB → Postgres] · (4) scheduler · (5) alerting · (6) UI [HAVE] · plus NLQ/analytics differentiator [`llm_nlq`]. **Current gap = layers 3/4/5.** B1 builds layer 3 in its no-backend form; B6 (Phase 5, Dockerised Postgres + FastAPI) builds 4/5.
@@ -56,7 +56,8 @@ Layers: (1) connectors/ingest · (2) check engine [HAVE: `run_scoring` + Isolati
 4. **Scale / "proper hosted Docker DB"?** YES, eventually — Postgres via Docker at the platform phase. NOT yet: JSON manifest now → local DuckDB next → hosted Postgres later. The manifest schema is the migration contract, so this is a clean upgrade, not a rewrite.
 
 ## Suggested next steps (Phase 3+)
-- Commit Phase 2 on a `feat/llm-nlq-and-history` branch (app.py + llm_nlq.py + run_manifest.py + .gitignore + CLAUDE.md; NOT `_selftest_phase2.py` unless kept as a test). Open PR.
-- **B2** scorecard + per-column SLAs (use `evaluate_slas` / `compute_deltas`) and a printable exec summary (extend `build_story_banner()`).
-- **B3** remediation export (cleaned file + remediation log from `run_cleaning()`).
+- ✅ Phase 2 committed → **PR #2** (`feat/llm-nlq-and-history`, base `main`). B2 scorecard bundled into the same PR.
+- ✅ **B2 DONE** — per-DIMENSION SLAs + scorecard + printable HTML export + deltas. *Follow-up:* **per-COLUMN SLAs** (needs per-column dimension scores surfaced into the manifest first).
+- **B3** remediation export (cleaned file + remediation log from `run_cleaning()`) ← suggested next.
 - Then **B4** multi-file + schema drift (reuse `dataset_signature`), **B5** analytics NLQ (time-series/comparisons via the LLM plan), **B6** backend (Docker Postgres + scheduler + alerting).
+- Housekeeping: PR #1 (v2.7) is redundant since `main` already has v2.7 — owner may close it or merge for the record.

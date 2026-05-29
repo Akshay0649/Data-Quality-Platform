@@ -2037,8 +2037,9 @@ if "scored_df" in st.session_state:
 </script>
 """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+    tab1, tab_sc, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
         "🔍 Profile",
+        "🎯 Scorecard",
         "💬 Ask Your Data",
         "📊 Dashboard",
         "📐 Dimension Analysis",
@@ -3111,6 +3112,97 @@ if "scored_df" in st.session_state:
                     st.caption("Since previous run:   " + "    ·    ".join(chips))
 
                 st.dataframe(trend, use_container_width=True, hide_index=True)
+
+    # =========================================================================
+    # TAB — EXECUTIVE SCORECARD  (v3.0 B2 — business SLAs + printable export)
+    # =========================================================================
+    with tab_sc:
+        st.markdown("""
+        <div style="background:linear-gradient(135deg,#23022E 0%,#3D1040 100%);
+                    border-radius:14px;padding:20px 28px;margin-bottom:20px;
+                    border:1px solid #915466;">
+          <h2 style="color:#FDFFFF;margin:0 0 6px;font-size:20px;font-weight:800;">🎯 Executive Scorecard</h2>
+          <p style="color:#C79192;margin:0;font-size:13px;line-height:1.6;">
+            One screen for decision-makers: set quality targets (SLAs), see pass/fail at a glance,
+            and export a printable report.
+          </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not _PHASE2_OK:
+            st.warning("Scorecard module not loaded: " + _PHASE2_ERR)
+        else:
+            st.markdown("**Quality targets (SLAs)** — minimum acceptable score per area")
+            _sc_dims = ["overall", "completeness", "validity", "accuracy", "consistency", "uniqueness"]
+            _sc_def = {"overall": 80, "completeness": 80, "validity": 80,
+                       "accuracy": 85, "consistency": 80, "uniqueness": 90}
+            _sc_cols = st.columns(6)
+            slas = {}
+            for _i, _d in enumerate(_sc_dims):
+                slas[_d] = _sc_cols[_i].number_input(
+                    run_manifest.DIMENSION_LABELS.get(_d, _d).split(" (")[0],
+                    min_value=0, max_value=100, value=_sc_def[_d], key=f"sla_{_d}")
+
+            _sc_name = str(st.session_state.get("demo_domain_label", "dataset"))
+            sc_manifest = run_manifest.build_manifest(df, score_stats, col_mapping, _sc_name)
+            scard = run_manifest.build_scorecard(sc_manifest, slas)
+
+            _stat_color = {"PASS": "#1D9E75", "AT RISK": "#BA7517", "FAIL": "#E24B4A"}[scard["status"]]
+            _stat_bg = {"PASS": "#f0fdf4", "AT RISK": "#fffbeb", "FAIL": "#fff5f5"}[scard["status"]]
+            st.markdown(
+                f'<div style="background:{_stat_bg};border-left:6px solid {_stat_color};'
+                f'border-radius:10px;padding:16px 20px;margin:6px 0 18px;">'
+                f'<p style="margin:0;font-size:18px;font-weight:800;color:{_stat_color};">'
+                f'Status: {scard["status"]}</p>'
+                f'<p style="margin:4px 0 0;color:#23022E;font-size:13px;">'
+                f'{scard["passed"]}/{scard["total"]} targets met · Overall quality '
+                f'{(sc_manifest["overall_dq_score"] or 0):.1f}/100 · '
+                f'{sc_manifest["critical_count"]:,} critical rows</p></div>',
+                unsafe_allow_html=True,
+            )
+
+            sc_df = pd.DataFrame([{
+                "Area": r["label"],
+                "Score": r["actual"],
+                "Target": r["target"],
+                "Weight %": r["weight"] if r["weight"] is not None else 0,
+                "Status": "✅ Pass" if r["pass"] else "❌ Fail",
+            } for r in scard["rows"]])
+            st.dataframe(
+                sc_df, use_container_width=True, hide_index=True,
+                column_config={
+                    "Score": st.column_config.ProgressColumn(
+                        "Score", min_value=0, max_value=100, format="%.1f"),
+                    "Target": st.column_config.NumberColumn("Target", format="%d"),
+                    "Weight %": st.column_config.NumberColumn("Weight %", format="%d%%"),
+                },
+            )
+
+            st.divider()
+            _prev = st.file_uploader(
+                "Optional: upload the PREVIOUS run's manifest to show change since then",
+                type=["json"], key="sc_prev_manifest")
+            _sc_deltas = None
+            if _prev is not None:
+                try:
+                    _prev_m = run_manifest.parse_manifest(_prev.getvalue())
+                    _sc_trend = run_manifest.manifests_to_trend_df([_prev_m, sc_manifest])
+                    _sc_deltas = run_manifest.compute_deltas(_sc_trend)
+                    if _sc_deltas and _sc_deltas.get("dimensions"):
+                        _chips = []
+                        for _d, _dv in _sc_deltas["dimensions"].items():
+                            _ar = "▲" if _dv > 0 else ("▼" if _dv < 0 else "—")
+                            _chips.append(f"**{_d}** {_ar} {_dv:+.1f}")
+                        st.caption("Change since previous run:   " + "    ·    ".join(_chips))
+                except Exception:
+                    st.warning("Could not read that manifest file.")
+
+            _sc_html = run_manifest.exec_summary_html(sc_manifest, scard, _sc_deltas)
+            st.download_button(
+                "⬇️ Download printable scorecard (HTML)",
+                data=_sc_html.encode("utf-8"),
+                file_name=f"scorecard_{_sc_name.replace(' ', '_')}.html",
+                mime="text/html", use_container_width=True)
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
