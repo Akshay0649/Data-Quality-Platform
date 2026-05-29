@@ -29,6 +29,19 @@ import plotly.graph_objects as go
 import streamlit as st
 from sklearn.ensemble import IsolationForest
 
+# ── v3.0 Phase 2 modules (optional LLM NLQ + run-manifest persistence) ──────────
+# Imported defensively: an optional-feature import must never break the core app.
+try:
+    import llm_nlq
+    import run_manifest
+    _PHASE2_OK = True
+    _PHASE2_ERR = ""
+except Exception as _e:
+    llm_nlq = None
+    run_manifest = None
+    _PHASE2_OK = False
+    _PHASE2_ERR = str(_e)
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="DataQual AI — v2.7",
@@ -948,6 +961,48 @@ with st.sidebar:
             "Consistency 15% · Uniqueness 5%."
         )
 
+    # ── 🤖 Smart Query (optional LLM NLQ) — v3.0 Phase 2 ────────────────────
+    llm_enabled = False
+    llm_base_url = llm_model = llm_key = ""
+    llm_send_samples = False
+    llm_cap = 25
+    with st.expander("🤖 Smart Query (optional LLM) — off by default"):
+        if not _PHASE2_OK:
+            st.warning("LLM module not loaded: " + _PHASE2_ERR)
+        else:
+            st.caption(
+                "Turn plain-English questions into a **safe query plan** using a FREE LLM. "
+                "Privacy: only column names & types are sent — **never your data rows**. "
+                "If the LLM is off, over-budget, or errors, the built-in rule engine answers."
+            )
+            llm_enabled = st.toggle(
+                "Enable Smart Query (LLM)", value=False,
+                help="ON = questions are first sent to a free LLM to build a query plan. "
+                     "OFF = pure rule engine, zero external calls (default).")
+            _providers = list(llm_nlq.PROVIDER_PRESETS.keys())
+            _prov = st.selectbox("Provider (free tiers)", _providers, index=0,
+                help="All are OpenAI-compatible free tiers. You bring your own key.")
+            _preset = llm_nlq.PROVIDER_PRESETS[_prov]
+            try:
+                _secret_key = st.secrets.get("LLM_API_KEY", "")
+            except Exception:
+                _secret_key = ""
+            llm_base_url = st.text_input("API base URL", value=_preset["base_url"])
+            llm_model = st.text_input("Model", value=_preset["model"])
+            llm_key = st.text_input(
+                "API key (session only)", value=_secret_key, type="password",
+                help="Kept only for this session. Better: add LLM_API_KEY to "
+                     ".streamlit/secrets.toml (git-ignored).")
+            if _preset.get("signup"):
+                st.caption("Get a free key → " + _preset["signup"])
+            llm_send_samples = st.checkbox(
+                "Also send sample category values (less private)", value=False,
+                help="Helps map words like 'iOS' to the right column. "
+                     "OFF = only column names are sent.")
+            llm_cap = st.number_input(
+                "Max LLM calls / session (cost guard)", min_value=1, value=25, step=5,
+                help="Hard $0 guard. When reached, the app falls back to rules.")
+
     st.divider()
     st.caption("Built by Akshay — Data Engineer · v2.7")
 
@@ -959,6 +1014,32 @@ CONFIG = {
     "outlier_zscore_threshold": outlier_z,
     "duplicate_subset":         dup_cols,
 }
+
+# ── v3.0 Phase 2: LLM config + per-session cost guard + NLQ router ──────────────
+LLM_CFG = {
+    "enabled":      bool(llm_enabled) and _PHASE2_OK,
+    "base_url":     llm_base_url,
+    "model":        llm_model,
+    "api_key":      llm_key,
+    "send_samples": bool(llm_send_samples),
+    "timeout":      20,
+}
+if _PHASE2_OK and llm_nlq is not None:
+    if "llm_guard" not in st.session_state or st.session_state.get("_llm_cap") != int(llm_cap):
+        st.session_state["llm_guard"] = llm_nlq.CostGuard(max_calls=int(llm_cap))
+        st.session_state["_llm_cap"] = int(llm_cap)
+
+
+def _smart_nlq(query, frame, mapping):
+    """Route an NLQ through the LLM planner when enabled, else the rule engine.
+
+    Returns (result_dict, engine_label, note). Never raises — guaranteed to return
+    a parse_nlq-compatible result via the rule engine if the LLM path fails.
+    """
+    if LLM_CFG.get("enabled") and _PHASE2_OK and llm_nlq is not None:
+        return llm_nlq.smart_query(
+            query, frame, mapping, parse_nlq, LLM_CFG, st.session_state.get("llm_guard"))
+    return parse_nlq(query, frame, mapping), "rules", ""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEMO DATA GENERATOR
@@ -1956,7 +2037,7 @@ if "scored_df" in st.session_state:
 </script>
 """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
         "🔍 Profile",
         "💬 Ask Your Data",
         "📊 Dashboard",
@@ -1966,6 +2047,7 @@ if "scored_df" in st.session_state:
         "📈 Statistics",
         "⬇️ Export",
         "🚨 Risk Signals",
+        "🕒 History",
     ])
 
     # =========================================================================
@@ -2069,7 +2151,7 @@ if "scored_df" in st.session_state:
                 st.session_state["dash_nlq"] = ""
                 quick_q = ""
             if quick_q and quick_q.strip():
-                qs_result = parse_nlq(quick_q, df_f, col_mapping)
+                qs_result, _qs_engine, _qs_note = _smart_nlq(quick_q, df_f, col_mapping)
                 st.caption(qs_result["summary"])
                 if qs_result["intent"] == "aggregate" and qs_result["agg_df"] is not None:
                     st.dataframe(qs_result["agg_df"], use_container_width=True, hide_index=True)
@@ -2639,8 +2721,14 @@ if "scored_df" in st.session_state:
         active_query = nlq_input.strip() if nlq_input else ""
 
         if active_query:
-            result = parse_nlq(active_query, df_f, col_mapping)
+            result, _engine, _note = _smart_nlq(active_query, df_f, col_mapping)
             n_found = result["n"]
+            _badge = "🤖 Answered by LLM plan" if _engine == "llm" else "⚙️ Answered by rule engine"
+            if _PHASE2_OK and LLM_CFG.get("enabled") and st.session_state.get("llm_guard") is not None:
+                _badge += f" · {st.session_state['llm_guard'].remaining_calls()} LLM calls left"
+            if _note:
+                _badge += f" — {_note}"
+            st.caption(_badge)
 
             # ── Result summary banner ────────────────────────────────────────
             if n_found == 0:
@@ -2919,6 +3007,110 @@ if "scored_df" in st.session_state:
                     with _cols[_ci]:
                         if st.button(_ex, key=f"chip_{_row_start}_{_ci}", use_container_width=True):
                             st.session_state["nlq_chip"] = _ex
+
+    # =========================================================================
+    # TAB 10 — HISTORY / TRENDS  (v3.0 B1 — persistence keystone)
+    # =========================================================================
+    with tab10:
+        st.markdown("""
+        <div style="background:linear-gradient(135deg,#23022E 0%,#3D1040 100%);
+                    border-radius:14px;padding:20px 28px;margin-bottom:20px;
+                    border:1px solid #915466;">
+          <h2 style="color:#FDFFFF;margin:0 0 6px;font-size:20px;font-weight:800;">🕒 History & Trends</h2>
+          <p style="color:#C79192;margin:0;font-size:13px;line-height:1.6;">
+            Save a small <b>run manifest</b> for this dataset, then re-upload past manifests to
+            see whether quality improved. No backend, no data leaves your machine — the manifest
+            holds only scores &amp; counts.
+          </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not _PHASE2_OK:
+            st.warning("Persistence module not loaded: " + _PHASE2_ERR)
+        else:
+            ds_default = str(st.session_state.get("demo_domain_label", "dataset"))
+            ds_name = st.text_input(
+                "Dataset label", value=ds_default,
+                help="Give this dataset a stable name so its runs line up over time.")
+
+            manifest = run_manifest.build_manifest(df, score_stats, col_mapping, ds_name)
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Overall DQ", f"{(manifest['overall_dq_score'] or 0):.1f}")
+            mc2.metric("Rows", f"{manifest['row_count']:,}")
+            mc3.metric("Critical rows", f"{manifest['critical_count']:,}")
+            mc4.metric("Dataset signature", manifest["dataset_signature"])
+
+            st.download_button(
+                "⬇️ Download this run's manifest (JSON)",
+                data=run_manifest.manifest_to_bytes(manifest),
+                file_name=run_manifest.suggested_filename(manifest),
+                mime="application/json",
+                use_container_width=True,
+            )
+
+            st.divider()
+            st.markdown("**Compare past runs** — upload one or more saved manifests "
+                        "(the current run is always included):")
+            ups = st.file_uploader(
+                "Upload manifests", type=["json"], accept_multiple_files=True,
+                key="manifest_uploads", label_visibility="collapsed")
+
+            manifests, bad = [manifest], 0
+            for uf in (ups or []):
+                try:
+                    manifests.append(run_manifest.parse_manifest(uf.getvalue()))
+                except Exception:
+                    bad += 1
+            if bad:
+                st.warning(f"{bad} file(s) were not valid manifests and were skipped.")
+
+            # De-duplicate by (signature, timestamp)
+            _seen, uniq = set(), []
+            for m in manifests:
+                k = (m.get("dataset_signature"), m.get("created_at"))
+                if k not in _seen:
+                    _seen.add(k)
+                    uniq.append(m)
+
+            # Warn if mixing different datasets
+            sigs = {m.get("dataset_signature") for m in uniq}
+            if len(sigs) > 1:
+                st.info("Heads up: these manifests come from **different dataset schemas** "
+                        "(signatures differ). Trends are most meaningful within one dataset.")
+
+            trend = run_manifest.manifests_to_trend_df(uniq)
+            if len(trend) < 2:
+                st.info("Upload at least one earlier manifest to draw a trend line. "
+                        "Right now you're seeing only the current run.")
+            else:
+                fig_tr = go.Figure()
+                for _dim, _color in [
+                    ("overall", "#915466"), ("completeness", "#1D9E75"),
+                    ("validity", "#3C6E9E"), ("accuracy", "#BA7517"),
+                    ("consistency", "#7A5C9E"), ("uniqueness", "#C0617A"),
+                ]:
+                    if _dim in trend.columns:
+                        fig_tr.add_trace(go.Scatter(
+                            x=trend["created_at"], y=trend[_dim],
+                            mode="lines+markers", name=_dim.title(),
+                            line=dict(color=_color, width=3 if _dim == "overall" else 1.5),
+                        ))
+                fig_tr.update_layout(
+                    **_chart_layout(height=420),
+                    xaxis=dict(**_GRID_X, title=""),
+                    yaxis=dict(**_GRID_Y, title="Score", range=[0, 105]),
+                )
+                st.plotly_chart(fig_tr, use_container_width=True)
+
+                deltas = run_manifest.compute_deltas(trend)
+                if deltas and deltas.get("dimensions"):
+                    chips = []
+                    for _d, _dv in deltas["dimensions"].items():
+                        _arrow = "▲" if _dv > 0 else ("▼" if _dv < 0 else "—")
+                        chips.append(f"**{_d}** {_arrow} {_dv:+.1f}")
+                    st.caption("Since previous run:   " + "    ·    ".join(chips))
+
+                st.dataframe(trend, use_container_width=True, hide_index=True)
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
