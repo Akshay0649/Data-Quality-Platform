@@ -34,11 +34,13 @@ from sklearn.ensemble import IsolationForest
 try:
     import llm_nlq
     import run_manifest
+    import remediation
     _PHASE2_OK = True
     _PHASE2_ERR = ""
 except Exception as _e:
     llm_nlq = None
     run_manifest = None
+    remediation = None
     _PHASE2_OK = False
     _PHASE2_ERR = str(_e)
 
@@ -2037,7 +2039,7 @@ if "scored_df" in st.session_state:
 </script>
 """, unsafe_allow_html=True)
 
-    tab1, tab_sc, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+    tab1, tab_sc, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab_rem, tab9, tab10 = st.tabs([
         "🔍 Profile",
         "🎯 Scorecard",
         "💬 Ask Your Data",
@@ -2047,6 +2049,7 @@ if "scored_df" in st.session_state:
         "🔬 Deep Dive",
         "📈 Statistics",
         "⬇️ Export",
+        "🛠️ Remediation",
         "🚨 Risk Signals",
         "🕒 History",
     ])
@@ -3203,6 +3206,71 @@ if "scored_df" in st.session_state:
                 data=_sc_html.encode("utf-8"),
                 file_name=f"scorecard_{_sc_name.replace(' ', '_')}.html",
                 mime="text/html", use_container_width=True)
+
+    # =========================================================================
+    # TAB — REMEDIATION  (v3.0 B3 — fix, prove, export)
+    # =========================================================================
+    with tab_rem:
+        st.markdown("""
+        <div style="background:linear-gradient(135deg,#23022E 0%,#3D1040 100%);
+                    border-radius:14px;padding:20px 28px;margin-bottom:20px;
+                    border:1px solid #915466;">
+          <h2 style="color:#FDFFFF;margin:0 0 6px;font-size:20px;font-weight:800;">🛠️ Remediation</h2>
+          <p style="color:#C79192;margin:0;font-size:13px;line-height:1.6;">
+            What we fixed automatically, what still needs a human, and a clean file you can
+            actually use — plus an auditable log of every change.
+          </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not _PHASE2_OK or remediation is None:
+            st.warning("Remediation module not loaded: " + _PHASE2_ERR)
+        else:
+            _rlog = remediation.build_remediation_log(clean_stats, CONFIG)
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("Rows in → out", f"{_rlog['rows_input']:,} → {_rlog['rows_output']:,}")
+            rc2.metric("Auto-fixed", f"{_rlog['total_fixed']:,}")
+            rc3.metric("Flagged for review", f"{_rlog['total_flagged']:,}")
+
+            st.subheader("✅ What we fixed automatically")
+            _rdf = remediation.remediation_log_df(_rlog)
+            if _rdf.empty:
+                st.info("No automatic fixes were needed — your data was already clean.")
+            else:
+                st.dataframe(_rdf, use_container_width=True, hide_index=True)
+
+            st.subheader("📋 Suggested actions (need a human)")
+            _sa_df = remediation.suggested_actions_df(df, col_mapping)
+            if _sa_df.empty:
+                st.success("Nothing flagged for manual review — you're good to go.")
+            else:
+                st.dataframe(_sa_df, use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.subheader("⬇️ Export")
+            _rem_name = str(st.session_state.get("demo_domain_label", "dataset")).replace(" ", "_")
+            _cleaned = remediation.cleaned_business_df(df)
+            st.caption(f"Cleaned file: {len(_cleaned):,} rows × {_cleaned.shape[1]} business "
+                       f"columns (internal flag columns removed).")
+            _ec1, _ec2, _ec3 = st.columns(3)
+            with _ec1:
+                st.download_button(
+                    "⬇️ Cleaned dataset (CSV)",
+                    data=_cleaned.to_csv(index=False).encode("utf-8"),
+                    file_name=f"cleaned_{_rem_name}.csv", mime="text/csv",
+                    use_container_width=True)
+            with _ec2:
+                st.download_button(
+                    "⬇️ Remediation log (Markdown)",
+                    data=remediation.remediation_log_markdown(_rlog).encode("utf-8"),
+                    file_name=f"remediation_log_{_rem_name}.md", mime="text/markdown",
+                    use_container_width=True)
+            with _ec3:
+                st.download_button(
+                    "⬇️ Remediation log (JSON)",
+                    data=remediation.remediation_log_json(_rlog).encode("utf-8"),
+                    file_name=f"remediation_log_{_rem_name}.json", mime="application/json",
+                    use_container_width=True)
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
