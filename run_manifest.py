@@ -35,7 +35,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2  # v2 adds `columns` (business schema) for drift detection
 
 # The five scoring dimensions and the stats keys run_scoring() emits for each.
 _DIMENSION_STATS = {
@@ -49,6 +49,24 @@ _DIMENSION_WEIGHTS = {
     "completeness": 20, "validity": 25, "accuracy": 35,
     "consistency": 15, "uniqueness": 5,
 }
+
+# Engineered columns the pipeline adds (excluded from the business schema).
+_ENGINEERED_SUFFIXES = ("_parse_error", "_negative", "_below_min", "_above_max", "_outlier")
+_ENGINEERED_EXACT = {"had_nulls", "isolation_score", "iqr_outlier_count", "is_anomaly", "dq_issues"}
+
+
+def business_columns(df) -> list:
+    """The user's own columns (name + dtype), excluding engineered score/flag columns.
+
+    Used for schema-drift detection across files/runs (B4).
+    """
+    out = []
+    for c in df.columns:
+        c = str(c)
+        if c.startswith("dq_") or c in _ENGINEERED_EXACT or c.endswith(_ENGINEERED_SUFFIXES):
+            continue
+        out.append({"name": c, "dtype": str(df[c].dtype)})
+    return out
 
 
 def dataset_signature(df: pd.DataFrame) -> str:
@@ -98,6 +116,7 @@ def build_manifest(
         "created_at": created_at,
         "row_count": int(len(scored_df)),
         "column_count": int(scored_df.shape[1]),
+        "columns": business_columns(scored_df),
         "overall_dq_score": round(float(overall), 2) if overall is not None else None,
         "dimensions": dims,
         "dimension_weights": dict(_DIMENSION_WEIGHTS),

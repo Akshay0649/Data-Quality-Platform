@@ -35,12 +35,14 @@ try:
     import llm_nlq
     import run_manifest
     import remediation
+    import multi_source
     _PHASE2_OK = True
     _PHASE2_ERR = ""
 except Exception as _e:
     llm_nlq = None
     run_manifest = None
     remediation = None
+    multi_source = None
     _PHASE2_OK = False
     _PHASE2_ERR = str(_e)
 
@@ -2039,7 +2041,7 @@ if "scored_df" in st.session_state:
 </script>
 """, unsafe_allow_html=True)
 
-    tab1, tab_sc, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab_rem, tab9, tab10 = st.tabs([
+    tab1, tab_sc, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab_rem, tab_ms, tab9, tab10 = st.tabs([
         "🔍 Profile",
         "🎯 Scorecard",
         "💬 Ask Your Data",
@@ -2050,6 +2052,7 @@ if "scored_df" in st.session_state:
         "📈 Statistics",
         "⬇️ Export",
         "🛠️ Remediation",
+        "📦 Multi-Source",
         "🚨 Risk Signals",
         "🕒 History",
     ])
@@ -3271,6 +3274,81 @@ if "scored_df" in st.session_state:
                     data=remediation.remediation_log_json(_rlog).encode("utf-8"),
                     file_name=f"remediation_log_{_rem_name}.json", mime="application/json",
                     use_container_width=True)
+
+    # =========================================================================
+    # TAB — MULTI-SOURCE  (v3.0 B4 — compare files + schema drift)
+    # =========================================================================
+    with tab_ms:
+        st.markdown("""
+        <div style="background:linear-gradient(135deg,#23022E 0%,#3D1040 100%);
+                    border-radius:14px;padding:20px 28px;margin-bottom:20px;
+                    border:1px solid #915466;">
+          <h2 style="color:#FDFFFF;margin:0 0 6px;font-size:20px;font-weight:800;">📦 Multi-Source</h2>
+          <p style="color:#C79192;margin:0;font-size:13px;line-height:1.6;">
+            Upload several CSVs to compare their quality side by side and detect
+            <b>schema drift</b> between sources. The first file is the baseline.
+          </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not _PHASE2_OK or multi_source is None:
+            st.warning("Multi-source module not loaded: " + _PHASE2_ERR)
+        else:
+            _ms_files = st.file_uploader(
+                "Upload CSV files", type=["csv"], accept_multiple_files=True, key="ms_uploads")
+            if not _ms_files:
+                st.info("Upload 2+ CSVs to compare. Tip: grab a cleaned CSV from the "
+                        "🛠️ Remediation or ⬇️ Export tab to try it.")
+            else:
+                _ms_manifests, _ms_errors = [], []
+                for _uf in _ms_files:
+                    try:
+                        _raw = pd.read_csv(_uf)
+                        _dt = detect_col_types(_raw)
+                        _cm = map_columns_to_roles(_raw, _dt)
+                        _cleaned, _ = run_cleaning(_raw, _cm)
+                        _scored, _ss = run_scoring(_cleaned, _cm)
+                        _ms_manifests.append(run_manifest.build_manifest(_scored, _ss, _cm, _uf.name))
+                    except Exception as _e:
+                        _ms_errors.append(f"{_uf.name} ({type(_e).__name__})")
+                if _ms_errors:
+                    st.warning("Could not score: " + " · ".join(_ms_errors))
+
+                if _ms_manifests:
+                    st.subheader("Quality by source")
+                    _cmp = multi_source.comparison_df(_ms_manifests)
+                    st.dataframe(
+                        _cmp, use_container_width=True, hide_index=True,
+                        column_config={"Overall DQ": st.column_config.ProgressColumn(
+                            "Overall DQ", min_value=0, max_value=100, format="%.1f")})
+                    try:
+                        _fig_ms = go.Figure(go.Bar(
+                            x=_cmp["Source"], y=_cmp["Overall DQ"], marker_color="#915466",
+                            text=_cmp["Overall DQ"], textposition="outside"))
+                        _fig_ms.update_layout(
+                            **_chart_layout(height=300),
+                            xaxis=dict(**_GRID_X, title=""),
+                            yaxis=dict(**_GRID_Y, title="Overall DQ", range=[0, 108]))
+                        st.plotly_chart(_fig_ms, use_container_width=True)
+                    except Exception:
+                        pass
+
+                    if len(_ms_manifests) >= 2:
+                        st.subheader(f"Schema drift vs baseline ({_ms_manifests[0]['dataset_name']})")
+                        for _entry in multi_source.drift_report(_ms_manifests):
+                            _sum = multi_source.drift_summary_text(_entry)
+                            if _entry.get("has_drift"):
+                                st.markdown(f"**{_entry['source']}** — {_sum}")
+                                if _entry.get("added"):
+                                    st.caption("➕ Added: " + ", ".join(_entry["added"]))
+                                if _entry.get("removed"):
+                                    st.caption("➖ Removed: " + ", ".join(_entry["removed"]))
+                                for _tc in _entry.get("type_changed", []):
+                                    st.caption(f"🔄 {_tc['column']}: {_tc['from']} → {_tc['to']}")
+                            else:
+                                st.markdown(f"**{_entry['source']}** — ✅ {_sum}")
+                    else:
+                        st.caption("Upload a second file to see schema drift vs the baseline.")
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
