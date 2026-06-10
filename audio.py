@@ -85,10 +85,11 @@ class _AudioCapture:
 
 
 class WhisperAPICapture(_AudioCapture):
-    def __init__(self, on_transcription, openai_api_key, device_index=None):
+    def __init__(self, on_transcription, openai_api_key, device_index=None, language=""):
         super().__init__(on_transcription, device_index)
         import openai
         self._client = openai.OpenAI(api_key=openai_api_key)
+        self._language = language or None
 
     def _transcribe(self, audio):
         import soundfile as sf
@@ -97,8 +98,10 @@ class WhisperAPICapture(_AudioCapture):
         buf.seek(0)
         buf.name = "audio.wav"
         try:
-            result = self._client.audio.transcriptions.create(
-                model="whisper-1", file=buf)
+            kwargs = {"model": "whisper-1", "file": buf}
+            if self._language:
+                kwargs["language"] = self._language
+            result = self._client.audio.transcriptions.create(**kwargs)
             text = result.text.strip()
             if text:
                 self.on_transcription(text)
@@ -107,14 +110,18 @@ class WhisperAPICapture(_AudioCapture):
 
 
 class LocalWhisperCapture(_AudioCapture):
-    def __init__(self, on_transcription, model_size="base", device_index=None):
+    def __init__(self, on_transcription, model_size="base", device_index=None, language=""):
         super().__init__(on_transcription, device_index)
         from faster_whisper import WhisperModel
         self._model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        self._language = language or None
 
     def _transcribe(self, audio):
         try:
-            segments, _ = self._model.transcribe(audio, beam_size=5)
+            kwargs = {"beam_size": 5}
+            if self._language:
+                kwargs["language"] = self._language
+            segments, _ = self._model.transcribe(audio, **kwargs)
             text = " ".join(s.text for s in segments).strip()
             if text:
                 self.on_transcription(text)
@@ -124,10 +131,12 @@ class LocalWhisperCapture(_AudioCapture):
 
 def make_audio_capture(config, on_transcription):
     device_index = find_device_index(config.audio_device)
+    lang = getattr(config, "whisper_language", "")
     if config.whisper_mode == "local":
         return LocalWhisperCapture(on_transcription, config.whisper_local_model,
-                                   device_index)
+                                   device_index, lang)
     else:
         if not config.openai_api_key:
             raise ValueError("OpenAI API key needed for Whisper API transcription.")
-        return WhisperAPICapture(on_transcription, config.openai_api_key, device_index)
+        return WhisperAPICapture(on_transcription, config.openai_api_key,
+                                 device_index, lang)

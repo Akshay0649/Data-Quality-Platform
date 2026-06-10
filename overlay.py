@@ -40,6 +40,7 @@ class SettingsDialog(tk.Toplevel):
             ("Whisper mode", "whisper_mode", "choice", ["api", "local"]),
             ("Local Whisper model", "whisper_local_model", "choice",
              ["tiny", "base", "small", "medium"]),
+            ("Whisper language (e.g. de, en, blank=auto)", "whisper_language", "str", None),
             ("Overlay opacity", "overlay_opacity", "float", None),
             ("Extra system prompt", "system_prompt_extra", "str", None),
             ("Audio device (e.g. Stereomix)", "audio_device", "str", None),
@@ -214,10 +215,8 @@ class ParakeetOverlay:
         self._response.tag_configure("error",
             foreground=ERR, font=("Helvetica", 10, "bold"))
 
-        # Keep widget normal but block keyboard edits - this is the ONLY
-        # way to get reliable mouse-wheel scroll on Windows tkinter
         self._response.bind("<Key>", lambda e: "break")
-        self._response.bind("<Control-c>", lambda e: None)  # allow copy
+        self._response.bind("<Control-c>", lambda e: None)
 
         inp_frame = tk.Frame(root, bg=BG, pady=2)
         inp_frame.pack(fill="x", padx=8, pady=(0, 2))
