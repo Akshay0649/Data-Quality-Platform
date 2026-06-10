@@ -214,14 +214,10 @@ class ParakeetOverlay:
         self._response.tag_configure("error",
             foreground=ERR, font=("Helvetica", 10, "bold"))
 
-        self._response.config(state="disabled")
-
-        def _on_scroll(event):
-            self._response.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            return "break"
-
-        self._response.bind("<MouseWheel>", _on_scroll)
-        root.bind_all("<MouseWheel>", _on_scroll)
+        # Keep widget normal but block keyboard edits - this is the ONLY
+        # way to get reliable mouse-wheel scroll on Windows tkinter
+        self._response.bind("<Key>", lambda e: "break")
+        self._response.bind("<Control-c>", lambda e: None)  # allow copy
 
         inp_frame = tk.Frame(root, bg=BG, pady=2)
         inp_frame.pack(fill="x", padx=8, pady=(0, 2))
@@ -293,12 +289,9 @@ class ParakeetOverlay:
         self.on_provider_change(self._provider_var.get())
 
     def _clear(self):
-        self._response.config(state="normal")
         self._response.delete("1.0", "end")
-        self._response.config(state="disabled")
 
     def _poll_tokens(self):
-        self._response.config(state="normal")
         try:
             while True:
                 item = self._token_q.get_nowait()
@@ -311,5 +304,4 @@ class ParakeetOverlay:
         except queue.Empty:
             pass
         self._response.see("end")
-        self._response.config(state="disabled")
         self._root.after(50, self._poll_tokens)
