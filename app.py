@@ -36,6 +36,7 @@ try:
     import run_manifest
     import remediation
     import multi_source
+    import autopilot
     _PHASE2_OK = True
     _PHASE2_ERR = ""
 except Exception as _e:
@@ -43,6 +44,7 @@ except Exception as _e:
     run_manifest = None
     remediation = None
     multi_source = None
+    autopilot = None
     _PHASE2_OK = False
     _PHASE2_ERR = str(_e)
 
@@ -2041,9 +2043,10 @@ if "scored_df" in st.session_state:
 </script>
 """, unsafe_allow_html=True)
 
-    tab1, tab_sc, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab_rem, tab_ms, tab9, tab10 = st.tabs([
+    tab1, tab_sc, tab_ap, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab_rem, tab_ms, tab9, tab10 = st.tabs([
         "🔍 Profile",
         "🎯 Scorecard",
+        "🛸 Autopilot",
         "💬 Ask Your Data",
         "📊 Dashboard",
         "📐 Dimension Analysis",
@@ -3209,6 +3212,132 @@ if "scored_df" in st.session_state:
                 data=_sc_html.encode("utf-8"),
                 file_name=f"scorecard_{_sc_name.replace(' ', '_')}.html",
                 mime="text/html", use_container_width=True)
+
+    # =========================================================================
+    # TAB — AUTOPILOT  (v3.0 B5+ — one screen: policy → verdict → action)
+    # =========================================================================
+    with tab_ap:
+        st.markdown("""
+        <div style="background:linear-gradient(135deg,#23022E 0%,#3D1040 100%);
+                    border-radius:14px;padding:20px 28px;margin-bottom:20px;
+                    border:1px solid #915466;">
+          <h2 style="color:#FDFFFF;margin:0 0 6px;font-size:20px;font-weight:800;">🛸 Autopilot</h2>
+          <p style="color:#C79192;margin:0;font-size:13px;line-height:1.6;">
+            Set your quality bar once. Autopilot scores it against the policy and returns a
+            single, explainable decision — <b>approve</b>, <b>remediate</b>, or <b>quarantine</b> —
+            with the gates that drove it, a prioritised action plan, and the next steps.
+          </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not _PHASE2_OK or autopilot is None:
+            st.warning("Autopilot module not loaded: " + _PHASE2_ERR)
+        else:
+            # ── Policy controls (the quality bar) ─────────────────────────────
+            with st.expander("⚙️ Quality policy (the bar Autopilot decides against)", expanded=False):
+                st.caption("Minimum acceptable score per area, plus ceilings on the share of "
+                           "critical / anomalous rows. Defaults match the Scorecard.")
+                _ap_def = autopilot.DEFAULT_POLICY
+                _pc = st.columns(6)
+                _ap_policy = {}
+                for _i, _k in enumerate(["overall", "completeness", "validity",
+                                         "accuracy", "consistency", "uniqueness"]):
+                    _ap_policy["min_" + _k] = _pc[_i].number_input(
+                        _k.title(), min_value=0, max_value=100,
+                        value=int(_ap_def["min_" + _k]), key=f"ap_min_{_k}")
+                _pc2 = st.columns(2)
+                _ap_policy["max_critical_pct"] = _pc2[0].number_input(
+                    "Max critical rows %", min_value=0.0, max_value=100.0,
+                    value=float(_ap_def["max_critical_pct"]), step=0.5, key="ap_max_crit",
+                    help="Above this share of CRITICAL-severity rows, Autopilot quarantines the data.")
+                _ap_policy["max_anomaly_pct"] = _pc2[1].number_input(
+                    "Max anomaly rows %", min_value=0.0, max_value=100.0,
+                    value=float(_ap_def["max_anomaly_pct"]), step=0.5, key="ap_max_anom")
+
+            _ap_name = str(st.session_state.get("demo_domain_label", "dataset"))
+            try:
+                _ap = autopilot.run_autopilot(df, score_stats, col_mapping, _ap_policy, _ap_name)
+            except Exception as _ape:
+                st.error(f"Autopilot could not evaluate this run ({type(_ape).__name__}).")
+                _ap = None
+
+            if _ap is not None:
+                _dec = _ap["decision"]
+
+                # ── Verdict hero card ─────────────────────────────────────────
+                st.markdown(
+                    f'<div style="background:{_dec["verdict_bg"]};'
+                    f'border-left:6px solid {_dec["verdict_color"]};border-radius:12px;'
+                    f'padding:20px 24px;margin:4px 0 18px;">'
+                    f'<p style="margin:0;font-size:24px;font-weight:800;color:{_dec["verdict_color"]};">'
+                    f'{_dec["verdict_icon"]} {_dec["verdict"]}'
+                    f'<span style="font-size:13px;font-weight:600;color:#5E6472;margin-left:12px;">'
+                    f'confidence {_dec["confidence"]}/100</span></p>'
+                    f'<p style="margin:8px 0 0;font-size:14px;color:#23022E;font-weight:600;">'
+                    f'{_dec["headline"]}</p>'
+                    f'<p style="margin:6px 0 0;font-size:12.5px;color:#5E6472;">'
+                    f'{_dec["counts"]["gates_passed"]}/{_dec["counts"]["gates_total"]} gates passed · '
+                    f'{_dec["counts"]["rows"]:,} rows · {_dec["counts"]["critical"]:,} critical</p>'
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
+                _apc1, _apc2, _apc3 = st.columns(3)
+                _apc1.metric("Verdict", f'{_dec["verdict_icon"]} {_dec["verdict"]}')
+                _apc2.metric("Confidence", f'{_dec["confidence"]}/100')
+                _apc3.metric("Gates passed", f'{_dec["counts"]["gates_passed"]}/{_dec["counts"]["gates_total"]}')
+
+                # ── Why ───────────────────────────────────────────────────────
+                st.subheader("🧭 Why this decision")
+                for _r in _dec["reasons"]:
+                    st.markdown(f"- {_r}")
+
+                # ── Policy gates ──────────────────────────────────────────────
+                st.subheader("🚦 Policy gates")
+                st.dataframe(autopilot.checks_df(_dec), use_container_width=True, hide_index=True)
+
+                # ── Action plan ───────────────────────────────────────────────
+                st.subheader("📋 Prioritised action plan")
+                _ap_actions = autopilot.action_plan_df(_dec)
+                if _ap_actions.empty:
+                    st.success("No manual actions needed — nothing flagged for review.")
+                else:
+                    st.dataframe(_ap_actions, use_container_width=True, hide_index=True)
+
+                # ── Next steps ────────────────────────────────────────────────
+                st.subheader("➡️ Recommended next steps")
+                for _i, _s in enumerate(_dec["next_steps"], 1):
+                    st.markdown(f"{_i}. {_s}")
+
+                # ── Downloads ─────────────────────────────────────────────────
+                st.divider()
+                st.subheader("⬇️ Export the decision")
+                _ap_fname = _ap_name.replace(" ", "_")
+                _apd1, _apd2, _apd3 = st.columns(3)
+                with _apd1:
+                    st.download_button(
+                        "⬇️ Decision report (Markdown)",
+                        data=autopilot.report_markdown(_dec).encode("utf-8"),
+                        file_name=f"autopilot_{_ap_fname}.md", mime="text/markdown",
+                        use_container_width=True)
+                with _apd2:
+                    st.download_button(
+                        "⬇️ Decision report (JSON)",
+                        data=autopilot.report_json(_dec).encode("utf-8"),
+                        file_name=f"autopilot_{_ap_fname}.json", mime="application/json",
+                        use_container_width=True)
+                with _apd3:
+                    if remediation is not None:
+                        _ap_clean = remediation.cleaned_business_df(df)
+                        st.download_button(
+                            "⬇️ Cleaned dataset (CSV)",
+                            data=_ap_clean.to_csv(index=False).encode("utf-8"),
+                            file_name=f"cleaned_{_ap_fname}.csv", mime="text/csv",
+                            use_container_width=True,
+                            disabled=(_dec["verdict"] == "QUARANTINE"),
+                            help=("Blocked while the verdict is QUARANTINE — fix at source first."
+                                  if _dec["verdict"] == "QUARANTINE" else
+                                  "Business-ready file with internal flag columns removed."))
 
     # =========================================================================
     # TAB — REMEDIATION  (v3.0 B3 — fix, prove, export)
