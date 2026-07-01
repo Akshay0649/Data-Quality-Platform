@@ -36,3 +36,6 @@ build/
 .idea/
 *.DS_Store
 Thumbs.db
+
+# Local pre-makeover monolith backup — never commit
+app_backup_prerefactor.py
